@@ -13,3 +13,42 @@ jobs:
       - run: make contract
       - run: make test
       - run: make diff
+
+  service:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.24", cache-dependency-path: service/go.mod }
+      - run: test -z "$(gofmt -l service kernel)" || (gofmt -l service kernel; exit 1)
+      - run: cd service && go vet ./... && go test -race -count=1 ./...
+
+  sdk-unit:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.10", "3.13"]   # oldest supported and newest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "${{ matrix.python }}" }
+      - run: pip install -e 'sdk/python[dev]'
+      - run: cd sdk/python && python -m pytest tests/unit -q
+
+  e2e:
+    runs-on: ubuntu-latest
+    env:
+      GRAFT_TOKEN: ci-only-token-not-a-secret
+      GRAFT_URL: http://localhost:8080
+      GRAFT_E2E: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: docker compose up --build --detach --wait
+      - run: pip install -e 'sdk/python[dev]'
+      - run: cd sdk/python && python -m pytest tests/e2e -v
+      - if: failure()
+        run: docker compose logs graftd
+      - if: always()
+        run: docker compose down

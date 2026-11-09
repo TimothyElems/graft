@@ -1,7 +1,7 @@
-.PHONY: test test-go test-py diff contract all
+.PHONY: test test-go test-py diff contract all test-service test-sdk e2e e2e-compose
 export PATH := $(PATH):/usr/local/go/bin
 
-all: contract test diff
+all: contract test diff test-service
 
 contract:
 	python3 -c "import yaml,pathlib; from openapi_spec_validator import validate; p=pathlib.Path('contract/openapi.yaml').resolve(); validate(yaml.safe_load(p.read_text()), base_uri=p.as_uri())"
@@ -18,3 +18,16 @@ test: test-go test-py
 
 diff:
 	python3 parity/diff_random.py 300 1
+
+test-service:
+	cd service && go vet ./... && go test -race -count=1 ./...
+
+test-sdk:
+	cd sdk/python && .venv/bin/python -m pytest tests/unit -q
+
+e2e:              ## graftd binary + SDK e2e tests, no Docker needed
+	./scripts/e2e-local.sh
+
+e2e-compose:      ## the same tests against `docker compose up` (what CI runs)
+	docker compose up --build --detach --wait
+	cd sdk/python && GRAFT_E2E=1 GRAFT_TOKEN=local-dev-token-change-me .venv/bin/python -m pytest tests/e2e -v; s=$$?; cd ../.. && docker compose down; exit $$s
