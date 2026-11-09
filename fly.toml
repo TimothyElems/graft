@@ -1,0 +1,29 @@
+# Public demo of graftd (v0.2): in-memory store, fake step runner.
+# State resets when the machine sleeps or restarts. Not production.
+app = "graft-demo"
+primary_region = "cdg"
+
+[build]
+  dockerfile = "service/Dockerfile"   # build context is the repo root
+
+[env]
+  GRAFT_WORKERS = "2"
+  # GRAFT_TOKEN is a Fly secret
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[http_service.checks]]
+    method = "GET"
+    path = "/healthz"
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "5s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"
