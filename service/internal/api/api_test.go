@@ -234,9 +234,9 @@ func TestBadPipelineIsRefusedWithTheKernelsError(t *testing.T) {
 	bid := branch(t, ts, "feat-x")
 	for body, detail := range map[string]string{
 		`{"steps":[{"id":"a","needs":["b"]},{"id":"b","needs":["a"]}]}`: "cycle",
-		`{"steps":[{"id":"a"},{"id":"a"}]}`:                            "duplicate_step:a",
-		`{"steps":[{"id":"a","needs":["ghost"]}]}`:                     "unknown_dependency:ghost",
-		`{"steps":[{"id":"a","command":["graft-fake","maybe:1"]}]}`:    `step a: bad fake outcome "maybe:1", want ok:<ms> or fail:<ms>`,
+		`{"steps":[{"id":"a"},{"id":"a"}]}`:                             "duplicate_step:a",
+		`{"steps":[{"id":"a","needs":["ghost"]}]}`:                      "unknown_dependency:ghost",
+		`{"steps":[{"id":"a","command":["graft-fake","maybe:1"]}]}`:     `step a: bad fake outcome "maybe:1", want ok:<ms> or fail:<ms>`,
 	} {
 		code, p, hdr := call(t, ts, "POST", "/v1/branches/"+bid+"/runs", body, true)
 		wantProblem(t, code, p, hdr, 422, "invalid-pipeline")

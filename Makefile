@@ -19,7 +19,10 @@ test: test-go test-py
 diff:
 	python3 parity/diff_random.py 300 1
 
-test-service:
+fmt-check:        ## same gate as CI: fail if any Go file needs gofmt
+	@out=$$(gofmt -l service kernel); if [ -n "$$out" ]; then echo "gofmt needed:"; echo "$$out"; exit 1; fi
+
+test-service: fmt-check
 	cd service && go vet ./... && go test -race -count=1 ./...
 
 test-sdk:
