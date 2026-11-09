@@ -1,0 +1,110 @@
+{
+  "name": "07_cancel_midflight",
+  "case": {
+    "steps": [
+      {
+        "id": "a",
+        "needs": []
+      },
+      {
+        "id": "b",
+        "needs": [
+          "a"
+        ]
+      },
+      {
+        "id": "c",
+        "needs": []
+      }
+    ],
+    "concurrency": 2,
+    "cancel_at_ms": 15,
+    "script": {
+      "c": [
+        {
+          "outcome": "ok",
+          "dur_ms": 100
+        }
+      ]
+    },
+    "name": "07_cancel_midflight"
+  },
+  "expect": {
+    "run_status": "cancelled",
+    "finished_ms": 15,
+    "steps": {
+      "a": {
+        "status": "succeeded",
+        "attempts": 1,
+        "started_ms": 0,
+        "finished_ms": 10,
+        "reason": ""
+      },
+      "b": {
+        "status": "cancelled",
+        "attempts": 1,
+        "started_ms": 10,
+        "finished_ms": 15,
+        "reason": "cancelled"
+      },
+      "c": {
+        "status": "cancelled",
+        "attempts": 1,
+        "started_ms": 0,
+        "finished_ms": 15,
+        "reason": "cancelled"
+      }
+    },
+    "events": [
+      {
+        "at_ms": 0,
+        "type": "step_started",
+        "step": "a",
+        "attempt": 1,
+        "reason": ""
+      },
+      {
+        "at_ms": 0,
+        "type": "step_started",
+        "step": "c",
+        "attempt": 1,
+        "reason": ""
+      },
+      {
+        "at_ms": 10,
+        "type": "step_succeeded",
+        "step": "a",
+        "attempt": 1,
+        "reason": ""
+      },
+      {
+        "at_ms": 10,
+        "type": "step_started",
+        "step": "b",
+        "attempt": 1,
+        "reason": ""
+      },
+      {
+        "at_ms": 15,
+        "type": "step_cancelled",
+        "step": "b",
+        "attempt": 1,
+        "reason": "cancelled"
+      },
+      {
+        "at_ms": 15,
+        "type": "step_cancelled",
+        "step": "c",
+        "attempt": 1,
+        "reason": "cancelled"
+      },
+      {
+        "at_ms": 15,
+        "type": "run_finished",
+        "step": "",
+        "attempt": 0,
+        "reason": "cancelled"
+      }
+    ]
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "type": "https://graft.dev/problems/branch-limit",
+  "title": "Branch limit reached",
+  "status": 409,
+  "detail": "Project demo already has 50 live branches.",
+  "request_id": "req_01JBX7M0"
+}

@@ -1,0 +1,76 @@
+{
+  "name": "05_timeout_then_ok",
+  "case": {
+    "steps": [
+      {
+        "id": "a",
+        "needs": [],
+        "max_attempts": 2,
+        "timeout_ms": 20
+      }
+    ],
+    "script": {
+      "a": [
+        {
+          "outcome": "ok",
+          "dur_ms": 100
+        },
+        {
+          "outcome": "ok",
+          "dur_ms": 5
+        }
+      ]
+    },
+    "name": "05_timeout_then_ok"
+  },
+  "expect": {
+    "run_status": "succeeded",
+    "finished_ms": 25,
+    "steps": {
+      "a": {
+        "status": "succeeded",
+        "attempts": 2,
+        "started_ms": 0,
+        "finished_ms": 25,
+        "reason": ""
+      }
+    },
+    "events": [
+      {
+        "at_ms": 0,
+        "type": "step_started",
+        "step": "a",
+        "attempt": 1,
+        "reason": ""
+      },
+      {
+        "at_ms": 20,
+        "type": "step_retry",
+        "step": "a",
+        "attempt": 1,
+        "reason": "timeout"
+      },
+      {
+        "at_ms": 20,
+        "type": "step_started",
+        "step": "a",
+        "attempt": 2,
+        "reason": ""
+      },
+      {
+        "at_ms": 25,
+        "type": "step_succeeded",
+        "step": "a",
+        "attempt": 2,
+        "reason": ""
+      },
+      {
+        "at_ms": 25,
+        "type": "run_finished",
+        "step": "",
+        "attempt": 0,
+        "reason": "succeeded"
+      }
+    ]
+  }
+}

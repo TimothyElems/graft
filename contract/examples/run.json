@@ -1,0 +1,12 @@
+{
+  "id": "run_01JBX7H9",
+  "branch_id": "br_01JBX7C3",
+  "status": "failed",
+  "created_at": "2026-10-25T21:50:00Z",
+  "finished_at": "2026-10-25T21:50:41Z",
+  "steps": [
+    { "id": "clone", "status": "succeeded", "attempts": 1, "started_ms": 0, "finished_ms": 800, "reason": null },
+    { "id": "migrate", "status": "failed", "attempts": 3, "started_ms": 800, "finished_ms": 31000, "reason": "timeout" },
+    { "id": "seed", "status": "skipped", "attempts": 0, "started_ms": null, "finished_ms": 31000, "reason": "dependency:migrate" }
+  ]
+}

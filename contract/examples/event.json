@@ -1,0 +1,12 @@
+{
+  "id": "evt_01JBX7K2",
+  "seq": 4,
+  "run_id": "run_01JBX7H9",
+  "branch_id": "br_01JBX7C3",
+  "at": "2026-10-25T21:50:03Z",
+  "type": "step_retry",
+  "at_ms": 10,
+  "step": "migrate",
+  "attempt": 1,
+  "reason": "timeout"
+}

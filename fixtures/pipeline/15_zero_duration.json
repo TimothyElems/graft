@@ -1,0 +1,83 @@
+{
+  "name": "15_zero_duration",
+  "case": {
+    "steps": [
+      {
+        "id": "a",
+        "needs": []
+      },
+      {
+        "id": "b",
+        "needs": [
+          "a"
+        ]
+      }
+    ],
+    "script": {
+      "a": [
+        {
+          "outcome": "ok",
+          "dur_ms": 0
+        }
+      ]
+    },
+    "name": "15_zero_duration"
+  },
+  "expect": {
+    "run_status": "succeeded",
+    "finished_ms": 10,
+    "steps": {
+      "a": {
+        "status": "succeeded",
+        "attempts": 1,
+        "started_ms": 0,
+        "finished_ms": 0,
+        "reason": ""
+      },
+      "b": {
+        "status": "succeeded",
+        "attempts": 1,
+        "started_ms": 0,
+        "finished_ms": 10,
+        "reason": ""
+      }
+    },
+    "events": [
+      {
+        "at_ms": 0,
+        "type": "step_started",
+        "step": "a",
+        "attempt": 1,
+        "reason": ""
+      },
+      {
+        "at_ms": 0,
+        "type": "step_succeeded",
+        "step": "a",
+        "attempt": 1,
+        "reason": ""
+      },
+      {
+        "at_ms": 0,
+        "type": "step_started",
+        "step": "b",
+        "attempt": 1,
+        "reason": ""
+      },
+      {
+        "at_ms": 10,
+        "type": "step_succeeded",
+        "step": "b",
+        "attempt": 1,
+        "reason": ""
+      },
+      {
+        "at_ms": 10,
+        "type": "run_finished",
+        "step": "",
+        "attempt": 0,
+        "reason": "succeeded"
+      }
+    ]
+  }
+}

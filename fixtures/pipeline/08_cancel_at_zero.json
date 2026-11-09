@@ -1,0 +1,60 @@
+{
+  "name": "08_cancel_at_zero",
+  "case": {
+    "steps": [
+      {
+        "id": "a",
+        "needs": []
+      },
+      {
+        "id": "b",
+        "needs": []
+      }
+    ],
+    "cancel_at_ms": 0,
+    "name": "08_cancel_at_zero"
+  },
+  "expect": {
+    "run_status": "cancelled",
+    "finished_ms": 0,
+    "steps": {
+      "a": {
+        "status": "cancelled",
+        "attempts": 0,
+        "started_ms": null,
+        "finished_ms": 0,
+        "reason": "cancelled"
+      },
+      "b": {
+        "status": "cancelled",
+        "attempts": 0,
+        "started_ms": null,
+        "finished_ms": 0,
+        "reason": "cancelled"
+      }
+    },
+    "events": [
+      {
+        "at_ms": 0,
+        "type": "step_cancelled",
+        "step": "a",
+        "attempt": 0,
+        "reason": "cancelled"
+      },
+      {
+        "at_ms": 0,
+        "type": "step_cancelled",
+        "step": "b",
+        "attempt": 0,
+        "reason": "cancelled"
+      },
+      {
+        "at_ms": 0,
+        "type": "run_finished",
+        "step": "",
+        "attempt": 0,
+        "reason": "cancelled"
+      }
+    ]
+  }
+}

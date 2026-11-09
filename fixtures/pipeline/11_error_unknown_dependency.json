@@ -1,0 +1,17 @@
+{
+  "name": "11_error_unknown_dependency",
+  "case": {
+    "steps": [
+      {
+        "id": "a",
+        "needs": [
+          "zz"
+        ]
+      }
+    ],
+    "name": "11_error_unknown_dependency"
+  },
+  "expect": {
+    "error": "unknown_dependency:zz"
+  }
+}

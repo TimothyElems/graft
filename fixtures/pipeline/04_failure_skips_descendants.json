@@ -1,0 +1,129 @@
+{
+  "name": "04_failure_skips_descendants",
+  "case": {
+    "steps": [
+      {
+        "id": "a",
+        "needs": [],
+        "max_attempts": 1
+      },
+      {
+        "id": "b",
+        "needs": [
+          "a"
+        ]
+      },
+      {
+        "id": "c",
+        "needs": [
+          "b"
+        ]
+      },
+      {
+        "id": "d",
+        "needs": []
+      }
+    ],
+    "concurrency": 2,
+    "script": {
+      "a": [
+        {
+          "outcome": "fail",
+          "dur_ms": 10
+        }
+      ],
+      "d": [
+        {
+          "outcome": "ok",
+          "dur_ms": 50
+        }
+      ]
+    },
+    "name": "04_failure_skips_descendants"
+  },
+  "expect": {
+    "run_status": "failed",
+    "finished_ms": 50,
+    "steps": {
+      "a": {
+        "status": "failed",
+        "attempts": 1,
+        "started_ms": 0,
+        "finished_ms": 10,
+        "reason": "failed"
+      },
+      "b": {
+        "status": "skipped",
+        "attempts": 0,
+        "started_ms": null,
+        "finished_ms": 10,
+        "reason": "dependency:a"
+      },
+      "c": {
+        "status": "skipped",
+        "attempts": 0,
+        "started_ms": null,
+        "finished_ms": 10,
+        "reason": "dependency:b"
+      },
+      "d": {
+        "status": "succeeded",
+        "attempts": 1,
+        "started_ms": 0,
+        "finished_ms": 50,
+        "reason": ""
+      }
+    },
+    "events": [
+      {
+        "at_ms": 0,
+        "type": "step_started",
+        "step": "a",
+        "attempt": 1,
+        "reason": ""
+      },
+      {
+        "at_ms": 0,
+        "type": "step_started",
+        "step": "d",
+        "attempt": 1,
+        "reason": ""
+      },
+      {
+        "at_ms": 10,
+        "type": "step_failed",
+        "step": "a",
+        "attempt": 1,
+        "reason": "failed"
+      },
+      {
+        "at_ms": 10,
+        "type": "step_skipped",
+        "step": "b",
+        "attempt": 0,
+        "reason": "dependency:a"
+      },
+      {
+        "at_ms": 10,
+        "type": "step_skipped",
+        "step": "c",
+        "attempt": 0,
+        "reason": "dependency:b"
+      },
+      {
+        "at_ms": 50,
+        "type": "step_succeeded",
+        "step": "d",
+        "attempt": 1,
+        "reason": ""
+      },
+      {
+        "at_ms": 50,
+        "type": "run_finished",
+        "step": "",
+        "attempt": 0,
+        "reason": "failed"
+      }
+    ]
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "name": "10_error_cycle",
+  "case": {
+    "steps": [
+      {
+        "id": "a",
+        "needs": [
+          "b"
+        ]
+      },
+      {
+        "id": "b",
+        "needs": [
+          "a"
+        ]
+      }
+    ],
+    "name": "10_error_cycle"
+  },
+  "expect": {
+    "error": "cycle"
+  }
+}

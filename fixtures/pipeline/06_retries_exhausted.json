@@ -1,0 +1,92 @@
+{
+  "name": "06_retries_exhausted",
+  "case": {
+    "steps": [
+      {
+        "id": "a",
+        "needs": [],
+        "max_attempts": 2,
+        "backoff_ms": 3
+      },
+      {
+        "id": "b",
+        "needs": [
+          "a"
+        ]
+      }
+    ],
+    "script": {
+      "a": [
+        {
+          "outcome": "fail",
+          "dur_ms": 4
+        }
+      ]
+    },
+    "name": "06_retries_exhausted"
+  },
+  "expect": {
+    "run_status": "failed",
+    "finished_ms": 11,
+    "steps": {
+      "a": {
+        "status": "failed",
+        "attempts": 2,
+        "started_ms": 0,
+        "finished_ms": 11,
+        "reason": "failed"
+      },
+      "b": {
+        "status": "skipped",
+        "attempts": 0,
+        "started_ms": null,
+        "finished_ms": 11,
+        "reason": "dependency:a"
+      }
+    },
+    "events": [
+      {
+        "at_ms": 0,
+        "type": "step_started",
+        "step": "a",
+        "attempt": 1,
+        "reason": ""
+      },
+      {
+        "at_ms": 4,
+        "type": "step_retry",
+        "step": "a",
+        "attempt": 1,
+        "reason": "failed"
+      },
+      {
+        "at_ms": 7,
+        "type": "step_started",
+        "step": "a",
+        "attempt": 2,
+        "reason": ""
+      },
+      {
+        "at_ms": 11,
+        "type": "step_failed",
+        "step": "a",
+        "attempt": 2,
+        "reason": "failed"
+      },
+      {
+        "at_ms": 11,
+        "type": "step_skipped",
+        "step": "b",
+        "attempt": 0,
+        "reason": "dependency:a"
+      },
+      {
+        "at_ms": 11,
+        "type": "run_finished",
+        "step": "",
+        "attempt": 0,
+        "reason": "failed"
+      }
+    ]
+  }
+}

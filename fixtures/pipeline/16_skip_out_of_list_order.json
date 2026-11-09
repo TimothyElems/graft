@@ -1,0 +1,98 @@
+{
+  "name": "16_skip_out_of_list_order",
+  "case": {
+    "name": "16_skip_out_of_list_order",
+    "steps": [
+      {
+        "id": "c",
+        "needs": [
+          "b"
+        ]
+      },
+      {
+        "id": "b",
+        "needs": [
+          "a"
+        ]
+      },
+      {
+        "id": "a",
+        "needs": [],
+        "max_attempts": 1
+      }
+    ],
+    "concurrency": 1,
+    "script": {
+      "a": [
+        {
+          "outcome": "fail",
+          "dur_ms": 10
+        }
+      ]
+    }
+  },
+  "expect": {
+    "run_status": "failed",
+    "finished_ms": 10,
+    "steps": {
+      "c": {
+        "status": "skipped",
+        "attempts": 0,
+        "started_ms": null,
+        "finished_ms": 10,
+        "reason": "dependency:b"
+      },
+      "b": {
+        "status": "skipped",
+        "attempts": 0,
+        "started_ms": null,
+        "finished_ms": 10,
+        "reason": "dependency:a"
+      },
+      "a": {
+        "status": "failed",
+        "attempts": 1,
+        "started_ms": 0,
+        "finished_ms": 10,
+        "reason": "failed"
+      }
+    },
+    "events": [
+      {
+        "at_ms": 0,
+        "type": "step_started",
+        "step": "a",
+        "attempt": 1,
+        "reason": ""
+      },
+      {
+        "at_ms": 10,
+        "type": "step_failed",
+        "step": "a",
+        "attempt": 1,
+        "reason": "failed"
+      },
+      {
+        "at_ms": 10,
+        "type": "step_skipped",
+        "step": "b",
+        "attempt": 0,
+        "reason": "dependency:a"
+      },
+      {
+        "at_ms": 10,
+        "type": "step_skipped",
+        "step": "c",
+        "attempt": 0,
+        "reason": "dependency:b"
+      },
+      {
+        "at_ms": 10,
+        "type": "run_finished",
+        "step": "",
+        "attempt": 0,
+        "reason": "failed"
+      }
+    ]
+  }
+}

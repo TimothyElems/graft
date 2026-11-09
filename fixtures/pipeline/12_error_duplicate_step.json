@@ -1,0 +1,19 @@
+{
+  "name": "12_error_duplicate_step",
+  "case": {
+    "steps": [
+      {
+        "id": "a",
+        "needs": []
+      },
+      {
+        "id": "a",
+        "needs": []
+      }
+    ],
+    "name": "12_error_duplicate_step"
+  },
+  "expect": {
+    "error": "duplicate_step:a"
+  }
+}

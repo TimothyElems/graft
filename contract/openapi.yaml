@@ -1,0 +1,299 @@
+openapi: 3.1.0
+info:
+  title: Graft API
+  version: 1.0.0
+  summary: Run migration pipelines on short-lived database branches.
+  description: |
+    One contract for the Go service and the Python SDK. The SDK is generated from the types here,
+    then wrapped by hand. CI fails if generated code drifts from this file.
+    Errors use application/problem+json (RFC 9457).
+servers:
+  - url: http://localhost:8080
+security:
+  - bearerJwt: []
+paths:
+  /healthz:
+    get:
+      operationId: healthz
+      summary: Liveness and queue depth
+      security: []
+      responses:
+        "200":
+          description: Service is up
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, queue_depth]
+                properties:
+                  status: { type: string, enum: [ok] }
+                  queue_depth: { type: integer, minimum: 0 }
+  /v1/projects/{project}/branches:
+    parameters:
+      - $ref: "#/components/parameters/Project"
+    post:
+      operationId: createBranch
+      summary: Create a branch
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateBranch" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Branch" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+    get:
+      operationId: listBranches
+      summary: List branches, newest first
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: One page
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BranchPage" }
+  /v1/branches/{id}:
+    parameters:
+      - $ref: "#/components/parameters/BranchId"
+    get:
+      operationId: getBranch
+      summary: Get a branch
+      responses:
+        "200":
+          description: The branch
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Branch" }
+        "404": { $ref: "#/components/responses/Problem" }
+    delete:
+      operationId: deleteBranch
+      summary: Delete a branch and cancel its runs
+      responses:
+        "204": { description: Deleted }
+        "404": { $ref: "#/components/responses/Problem" }
+  /v1/branches/{id}/runs:
+    parameters:
+      - $ref: "#/components/parameters/BranchId"
+    post:
+      operationId: createRun
+      summary: Start a pipeline run on a branch
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateRun" }
+      responses:
+        "202":
+          description: Queued
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Run" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+  /v1/runs/{id}:
+    parameters:
+      - $ref: "#/components/parameters/RunId"
+    get:
+      operationId: getRun
+      summary: Get a run and its step results
+      responses:
+        "200":
+          description: The run
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Run" }
+        "404": { $ref: "#/components/responses/Problem" }
+  /v1/runs/{id}/cancel:
+    parameters:
+      - $ref: "#/components/parameters/RunId"
+    post:
+      operationId: cancelRun
+      summary: Cancel a run. Safe to repeat.
+      responses:
+        "202":
+          description: Cancel accepted
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Run" }
+        "404": { $ref: "#/components/responses/Problem" }
+  /v1/runs/{id}/events:
+    parameters:
+      - $ref: "#/components/parameters/RunId"
+    get:
+      operationId: listRunEvents
+      summary: Events for a run, oldest first
+      parameters:
+        - name: after
+          in: query
+          description: Return events with seq greater than this. Default 0.
+          schema: { type: integer, minimum: 0, default: 0 }
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: One page of events
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EventPage" }
+  /v1/runs/{id}/bundle:
+    parameters:
+      - $ref: "#/components/parameters/RunId"
+    get:
+      operationId: getRunBundle
+      summary: Repro bundle for support (gzip)
+      description: Case JSON, events, step logs with secrets removed, service version, and config. Everything a support engineer needs to replay the run in the kernel.
+      responses:
+        "200":
+          description: A .tar.gz file
+          content:
+            application/gzip:
+              schema: { type: string, format: binary }
+  /v1/stream:
+    get:
+      operationId: stream
+      summary: Websocket of events for one branch
+      description: |
+        Upgrade to a websocket. Each text frame is one Event (events.schema.json).
+        Connect with `?branch=<id>&after=<seq>` to resume; the server replays
+        everything after that seq, then goes live. A client that reconnects with its
+        last seq sees no gaps and no duplicates.
+        OpenAPI cannot describe websocket frames, so the frame schema is given in x-websocket.
+      parameters:
+        - name: branch
+          in: query
+          required: true
+          schema: { type: string }
+        - name: after
+          in: query
+          schema: { type: integer, minimum: 0, default: 0 }
+      responses:
+        "101": { description: Switching protocols }
+        "401": { $ref: "#/components/responses/Problem" }
+      x-websocket:
+        frame:
+          $ref: "./events.schema.json"
+components:
+  securitySchemes:
+    bearerJwt:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    Project: { name: project, in: path, required: true, schema: { type: string, pattern: "^[a-z][a-z0-9-]{1,40}$" } }
+    BranchId: { name: id, in: path, required: true, schema: { type: string, pattern: "^br_[A-Za-z0-9_]+$" } }
+    RunId: { name: id, in: path, required: true, schema: { type: string, pattern: "^run_[A-Za-z0-9_]+$" } }
+    Cursor: { name: cursor, in: query, schema: { type: string } }
+    Limit: { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      description: Same key and same body returns the first response. Same key and different body returns 422.
+      schema: { type: string, maxLength: 64 }
+  responses:
+    Problem:
+      description: Error
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+  schemas:
+    Problem:
+      type: object
+      required: [type, title, status]
+      properties:
+        type: { type: string, format: uri }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+        request_id: { type: string }
+    CreateBranch:
+      type: object
+      additionalProperties: false
+      required: [name]
+      properties:
+        name: { type: string, pattern: "^[a-z0-9][a-z0-9-]{0,62}$" }
+        git_ref: { type: string }
+        ttl_seconds: { type: integer, minimum: 60, maximum: 604800, default: 86400 }
+    Branch:
+      type: object
+      required: [id, project, name, status, created_at, expires_at]
+      properties:
+        id: { type: string }
+        project: { type: string }
+        name: { type: string }
+        status: { type: string, enum: [creating, ready, failed, deleting, deleted] }
+        git_ref: { type: [string, "null"] }
+        created_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time }
+    BranchPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Branch" }
+        next_cursor: { type: [string, "null"] }
+    StepSpec:
+      type: object
+      additionalProperties: false
+      required: [id]
+      properties:
+        id: { type: string, pattern: "^[a-z][a-z0-9_]{0,31}$" }
+        needs: { type: array, items: { type: string }, default: [] }
+        image: { type: string, description: Container image. Sandboxed. No network. Read-only root. }
+        command: { type: array, items: { type: string } }
+        max_attempts: { type: integer, minimum: 1, maximum: 10, default: 1 }
+        timeout_ms: { type: integer, minimum: 0, default: 0, description: 0 means no timeout }
+        backoff_ms: { type: integer, minimum: 0, default: 0 }
+    CreateRun:
+      type: object
+      additionalProperties: false
+      required: [steps]
+      properties:
+        steps:
+          type: array
+          minItems: 1
+          maxItems: 64
+          items: { $ref: "#/components/schemas/StepSpec" }
+        concurrency: { type: integer, minimum: 1, maximum: 16, default: 1 }
+    StepRun:
+      type: object
+      required: [id, status, attempts, started_ms, finished_ms, reason]
+      properties:
+        id: { type: string }
+        status: { type: string, enum: [pending, succeeded, failed, skipped, cancelled] }
+        attempts: { type: integer, minimum: 0 }
+        started_ms: { type: [integer, "null"] }
+        finished_ms: { type: [integer, "null"] }
+        reason: { type: [string, "null"] }
+    Run:
+      type: object
+      required: [id, branch_id, status, created_at, finished_at, steps]
+      properties:
+        id: { type: string }
+        branch_id: { type: string }
+        status: { type: string, enum: [queued, running, succeeded, failed, cancelled] }
+        created_at: { type: string, format: date-time }
+        finished_at: { type: [string, "null"], format: date-time }
+        steps:
+          type: array
+          items: { $ref: "#/components/schemas/StepRun" }
+    Event:
+      $ref: "./events.schema.json"
+    EventPage:
+      type: object
+      required: [items, last_seq]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Event" }
+        last_seq: { type: integer, minimum: 0 }

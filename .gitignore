@@ -1,0 +1,7 @@
+kernel/simulate.bin
+__pycache__/
+.pytest_cache/
+*.pyc
+.venv/
+dist/
+.DS_Store

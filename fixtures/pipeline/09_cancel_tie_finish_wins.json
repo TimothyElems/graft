@@ -1,0 +1,69 @@
+{
+  "name": "09_cancel_tie_finish_wins",
+  "case": {
+    "steps": [
+      {
+        "id": "a",
+        "needs": []
+      },
+      {
+        "id": "b",
+        "needs": [
+          "a"
+        ]
+      }
+    ],
+    "cancel_at_ms": 10,
+    "name": "09_cancel_tie_finish_wins"
+  },
+  "expect": {
+    "run_status": "cancelled",
+    "finished_ms": 10,
+    "steps": {
+      "a": {
+        "status": "succeeded",
+        "attempts": 1,
+        "started_ms": 0,
+        "finished_ms": 10,
+        "reason": ""
+      },
+      "b": {
+        "status": "cancelled",
+        "attempts": 0,
+        "started_ms": null,
+        "finished_ms": 10,
+        "reason": "cancelled"
+      }
+    },
+    "events": [
+      {
+        "at_ms": 0,
+        "type": "step_started",
+        "step": "a",
+        "attempt": 1,
+        "reason": ""
+      },
+      {
+        "at_ms": 10,
+        "type": "step_succeeded",
+        "step": "a",
+        "attempt": 1,
+        "reason": ""
+      },
+      {
+        "at_ms": 10,
+        "type": "step_cancelled",
+        "step": "b",
+        "attempt": 0,
+        "reason": "cancelled"
+      },
+      {
+        "at_ms": 10,
+        "type": "run_finished",
+        "step": "",
+        "attempt": 0,
+        "reason": "cancelled"
+      }
+    ]
+  }
+}

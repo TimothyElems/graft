@@ -1,0 +1,102 @@
+{
+  "name": "01_linear_ok",
+  "case": {
+    "steps": [
+      {
+        "id": "a",
+        "needs": []
+      },
+      {
+        "id": "b",
+        "needs": [
+          "a"
+        ]
+      },
+      {
+        "id": "c",
+        "needs": [
+          "b"
+        ]
+      }
+    ],
+    "name": "01_linear_ok"
+  },
+  "expect": {
+    "run_status": "succeeded",
+    "finished_ms": 30,
+    "steps": {
+      "a": {
+        "status": "succeeded",
+        "attempts": 1,
+        "started_ms": 0,
+        "finished_ms": 10,
+        "reason": ""
+      },
+      "b": {
+        "status": "succeeded",
+        "attempts": 1,
+        "started_ms": 10,
+        "finished_ms": 20,
+        "reason": ""
+      },
+      "c": {
+        "status": "succeeded",
+        "attempts": 1,
+        "started_ms": 20,
+        "finished_ms": 30,
+        "reason": ""
+      }
+    },
+    "events": [
+      {
+        "at_ms": 0,
+        "type": "step_started",
+        "step": "a",
+        "attempt": 1,
+        "reason": ""
+      },
+      {
+        "at_ms": 10,
+        "type": "step_succeeded",
+        "step": "a",
+        "attempt": 1,
+        "reason": ""
+      },
+      {
+        "at_ms": 10,
+        "type": "step_started",
+        "step": "b",
+        "attempt": 1,
+        "reason": ""
+      },
+      {
+        "at_ms": 20,
+        "type": "step_succeeded",
+        "step": "b",
+        "attempt": 1,
+        "reason": ""
+      },
+      {
+        "at_ms": 20,
+        "type": "step_started",
+        "step": "c",
+        "attempt": 1,
+        "reason": ""
+      },
+      {
+        "at_ms": 30,
+        "type": "step_succeeded",
+        "step": "c",
+        "attempt": 1,
+        "reason": ""
+      },
+      {
+        "at_ms": 30,
+        "type": "run_finished",
+        "step": "",
+        "attempt": 0,
+        "reason": "succeeded"
+      }
+    ]
+  }
+}

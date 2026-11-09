@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://graft.dev/contract/events.schema.json",
+  "title": "GraftEvent",
+  "description": "One event on a run. Sent by GET /v1/runs/{id}/events and on the /v1/stream websocket. The kernel produces type, at_ms, step, attempt and reason. The service adds id, seq, run_id, branch_id and at.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "seq", "run_id", "branch_id", "at", "type", "at_ms", "step", "attempt", "reason"],
+  "properties": {
+    "id": { "type": "string", "pattern": "^evt_[A-Za-z0-9_]+$" },
+    "seq": { "type": "integer", "minimum": 1, "description": "Per-run, starts at 1, no gaps. Resume with ?after=<seq>." },
+    "run_id": { "type": "string", "pattern": "^run_[A-Za-z0-9_]+$" },
+    "branch_id": { "type": "string", "pattern": "^br_[A-Za-z0-9_]+$" },
+    "at": { "type": "string", "format": "date-time", "description": "Wall-clock time the service recorded the event." },
+    "at_ms": { "type": "integer", "minimum": 0, "description": "Milliseconds since the run started. Same clock the kernel uses." },
+    "type": {
+      "type": "string",
+      "enum": ["run_started", "step_started", "step_succeeded", "step_failed", "step_retry", "step_skipped", "step_cancelled", "run_finished"]
+    },
+    "step": { "type": ["string", "null"], "description": "Step id. Null for run-level events." },
+    "attempt": { "type": "integer", "minimum": 0 },
+    "reason": { "type": ["string", "null"], "description": "failed, timeout, cancelled, dependency:<step>, or the final run status on run_finished." }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "type": { "enum": ["run_started", "run_finished"] } } },
+      "then": { "properties": { "step": { "type": "null" } } },
+      "else": { "properties": { "step": { "type": "string", "minLength": 1 } } }
+    },
+    {
+      "if": { "properties": { "type": { "const": "step_started" } } },
+      "then": { "properties": { "attempt": { "minimum": 1 } } }
+    },
+    {
+      "if": { "properties": { "type": { "const": "step_skipped" } } },
+      "then": { "properties": { "reason": { "type": "string", "pattern": "^dependency:.+" } } }
+    },
+    {
+      "if": { "properties": { "type": { "const": "run_finished" } } },
+      "then": { "properties": { "reason": { "enum": ["succeeded", "failed", "cancelled"] } } }
+    }
+  ]
+}
