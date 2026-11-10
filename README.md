@@ -2,7 +2,7 @@
 
 A Go service that runs migration pipelines on short-lived database branches, and a typed Python SDK for it. One contract joins them.
 
-Graft is an independent learning project, and it is early. v0.1 (contract and scheduling core), v0.2 (walking skeleton: Go service, sync Python SDK, end-to-end tests) and v0.3 (Postgres queue, leases, event log) exist. Everything else below is marked **planned**.
+Graft is an independent learning project, and it is early. v0.1 (contract and scheduling core), v0.2 (walking skeleton), v0.3 (Postgres queue, leases, event log) and v0.4 (the Python SDK: generated models, sync and async, strict typing) exist. Everything else below is marked **planned**.
 
 **Live demo:** https://graft-demo.fly.dev ([`/healthz`](https://graft-demo.fly.dev/healthz) is public; `/v1` needs a token). It still runs **v0.2** (in-memory, no database attached), so its state resets whenever the machine sleeps. It is not production.
 
@@ -13,7 +13,7 @@ Graft is an independent learning project, and it is early. v0.1 (contract and sc
 | v0.1 | Contract (OpenAPI + event schema), deterministic Go scheduler kernel, independent Python reference, 17 shared fixtures, random Go-vs-Python check | **Done** |
 | v0.2 | Walking skeleton: Go HTTP service, fake runner over the kernel, sync Python SDK, end-to-end tests against `docker compose`, run in CI | **Done** |
 | v0.3 | Postgres: migrations, job queue (`SKIP LOCKED`) with leases and heartbeat, gap-free event log written with each state change, cursor pages, Idempotency-Key | **Done** ([what is not](#not-built-yet)) |
-| v0.4 | Full SDK: generated models + drift gate, async client, pagination, retries, strict typing | Planned |
+| v0.4 | Python SDK: models generated from the contract with a drift gate, sync and async clients, typed errors, pagination iterators, retries with jitter on safe calls, mypy strict + pyright strict, wheel checked from a clean venv | **Done** |
 | v0.5 | Realtime websocket with resume after `seq`, chaos test | Planned |
 | v0.6 | Sandboxed Docker step runner, real clock shell, crash recovery, metrics/tracing, `graft.toml` | Planned |
 | v0.7 | Support kit: `graft doctor`, repro bundles, ten case files | Planned |
@@ -33,7 +33,7 @@ parity/                      Python: an independent reference, and the tests tha
 fixtures/pipeline/           17 cases with hand-derived results, read by both languages
 service/                     Go: graftd, the HTTP service and run workers
 service/migrations/          numbered SQL migrations, applied by graftd at start
-sdk/python/                  Python: graft-sdk, the sync client (v0.2)
+sdk/python/                  Python: graft-sdk, sync and async clients (models generated from the contract)
 compose.yaml                 graftd in a container, for the end-to-end tests
 db/schema.sql                the schema in one readable file; a test fails if it and the migrations differ
 docs/contract-notes.md       one sentence per endpoint, and the gaps found in the contract
@@ -50,8 +50,10 @@ docs/kernel-map.md           where each scheduling rule lives in the Go and Pyth
 - **Events** (`service/internal/events`): 20 concurrent writers to one run get seq 1..100 with no gaps or repeats; a rolled-back write leaves no gap; a run's state change, step results and events commit together or not at all.
 - **Pages and retries** (`service/internal/api`): 120 branches with the same `created_at` page as 50, 50, 20 with no repeats or misses; the same Idempotency-Key and body replays the first response (12 concurrent retries create one run), a different body gets 422.
 - **Migrations** (`service/internal/db`): concurrent starts apply each migration once; an edited, already-applied migration stops startup; a failing migration leaves nothing behind.
-- **SDK** (`make test-sdk`, Python 3.10 and 3.13 in CI): errors are chosen by problem `type`, so the two kinds of 422 raise different exceptions; timeouts are explicit; `runs.wait()` polls with backoff.
-- **End to end** (`make e2e`, or `make e2e-compose`, which is what CI runs): the SDK against a real `graftd`, and every raw response checked against `contract/openapi.yaml`.
+- **SDK** (`make test-sdk`, Python 3.10 and 3.13 in CI): every unit test runs on the sync AND the async client; errors are chosen by problem `type`; pagination is lazy and stops on a repeated cursor; retries happen only on GET and keyed POSTs, with the same Idempotency-Key on every attempt, against a flaky fake server.
+- **Drift gate** (`make drift-check`): CI regenerates `sdk/python/src/graft/_models.py` from the contract and fails on any difference.
+- **Typing** (`make sdk-typing`, `make check-wheel`): mypy `--strict` and pyright strict pass on the library and tests; `scripts/no_any.py` fails on `Any` in any public signature; the built wheel is installed alone in a fresh venv and a sample app is type-checked against it.
+- **End to end** (`make e2e`, or `make e2e-compose`, which is what CI runs): the SDK, sync and async, against a real `graftd` and Postgres, and every raw response checked against `contract/openapi.yaml`.
 
 ## Not built yet
 
@@ -62,17 +64,15 @@ docs/kernel-map.md           where each scheduling rule lives in the Go and Pyth
 
 ## Python SDK
 
+Sync and async clients; see [sdk/python/README.md](sdk/python/README.md).
+
 ```python
 from graft import Graft, StepSpec
 
 with Graft(token="...", base_url="http://localhost:8080") as g:
     br = g.branches.create("demo", name="feat-invoices")
-    run = g.runs.create(br.id, steps=[
-        StepSpec(id="migrate", max_attempts=3, backoff_ms=5, command=["graft-fake", "fail:10", "fail:10", "ok:10"]),
-        StepSpec(id="seed", needs=["migrate"]),
-    ])
-    run = g.runs.wait(run.id)
-    print(run.status, run.step("migrate").attempts)   # succeeded 3
+    run = g.runs.wait(g.runs.create(br.id, steps=[StepSpec(id="migrate"), StepSpec(id="seed", needs=["migrate"])]).id)
+    print(run.status, [e.type for e in g.runs.events(run.id)])
 ```
 
 ## The scheduling rules

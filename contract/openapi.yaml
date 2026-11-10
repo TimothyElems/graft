@@ -22,12 +22,7 @@ paths:
           description: Service is up
           content:
             application/json:
-              schema:
-                type: object
-                required: [status, queue_depth]
-                properties:
-                  status: { type: string, enum: [ok] }
-                  queue_depth: { type: integer, minimum: 0 }
+              schema: { $ref: "#/components/schemas/Health" }
   /v1/projects/{project}/branches:
     parameters:
       - $ref: "#/components/parameters/Project"
@@ -214,6 +209,12 @@ components:
         application/problem+json:
           schema: { $ref: "#/components/schemas/Problem" }
   schemas:
+    Health:
+      type: object
+      required: [status, queue_depth]
+      properties:
+        status: { type: string, enum: [ok] }
+        queue_depth: { type: integer, minimum: 0 }
     Problem:
       type: object
       required: [type, title, status]

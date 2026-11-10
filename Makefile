@@ -1,4 +1,4 @@
-.PHONY: test test-go test-py diff contract all test-service test-sdk e2e e2e-compose fmt-check pg-dev
+.PHONY: test test-go test-py diff contract all test-service test-sdk e2e e2e-compose fmt-check pg-dev drift-check sdk-typing check-wheel
 export PATH := $(PATH):/usr/local/go/bin
 
 all: contract test diff test-service
@@ -29,6 +29,11 @@ test-service: fmt-check   ## needs GRAFT_TEST_DATABASE_URL (see `make pg-dev`)
 pg-dev:           ## start a throwaway local Postgres and print the env var to export
 	@./scripts/pg-dev.sh start
 
+drift-check:      ## regenerate the SDK models from the contract; fail on any difference
+	./scripts/gen_models.sh
+	@git diff --exit-code -- sdk/python/src/graft/_models.py || { echo "DRIFT: _models.py no longer matches contract/openapi.yaml. Run scripts/gen_models.sh and commit the result."; exit 1; }
+	@git ls-files --error-unmatch sdk/python/src/graft/_models.py >/dev/null 2>&1 || { echo "DRIFT: _models.py is not tracked by git (git diff cannot see untracked files)."; exit 1; }
+
 test-sdk:
 	cd sdk/python && .venv/bin/python -m pytest tests/unit -q
 
@@ -38,3 +43,10 @@ e2e:              ## graftd binary + SDK e2e tests, no Docker needed
 e2e-compose:      ## the same tests against `docker compose up` (what CI runs)
 	docker compose up --build --detach --wait
 	cd sdk/python && GRAFT_E2E=1 GRAFT_TOKEN=local-dev-token-change-me .venv/bin/python -m pytest tests/e2e -v; s=$$?; cd ../.. && docker compose down; exit $$s
+
+sdk-typing:       ## mypy --strict, pyright strict, no Any in the public API
+	cd sdk/python && .venv/bin/mypy && .venv/bin/pyright
+	sdk/python/.venv/bin/python scripts/no_any.py
+
+check-wheel:      ## build the wheel, install it alone in a clean venv, type-check the sample app
+	PYBIN=sdk/python/.venv/bin/python ./scripts/check_wheel.sh

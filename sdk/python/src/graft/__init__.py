@@ -1,22 +1,26 @@
-"""Python SDK for Graft. Early (v0.2): sync client, hand-written models."""
-from .client import DEFAULT_TIMEOUT, Graft, __version__
+"""Python SDK for Graft: sync and async clients, models generated from the contract."""
+from ._async_client import AsyncGraft
+from ._base import DEFAULT_TIMEOUT, __version__
+from .client import Graft
 from .errors import (
-    APIConnectionError,
     APIError,
-    APITimeoutError,
-    AuthenticationError,
-    ConflictError,
+    Conflict,
     GraftError,
-    InvalidPipelineError,
-    NotFoundError,
+    IdempotencyKeyReused,
+    InvalidPipeline,
+    InvalidRequest,
+    NetworkError,
+    NotFound,
+    RateLimited,
+    RequestTimeout,
     ServerError,
-    ValidationError,
+    Unauthorized,
 )
-from .models import Branch, Health, Run, StepRun, StepSpec
+from .models import Branch, BranchPage, Event, EventPage, Health, Run, StepRun, StepSpec
 
 __all__ = [
-    "DEFAULT_TIMEOUT", "Graft", "__version__",
-    "APIConnectionError", "APIError", "APITimeoutError", "AuthenticationError", "ConflictError",
-    "GraftError", "InvalidPipelineError", "NotFoundError", "ServerError", "ValidationError",
-    "Branch", "Health", "Run", "StepRun", "StepSpec",
+    "AsyncGraft", "DEFAULT_TIMEOUT", "Graft", "__version__",
+    "APIError", "Conflict", "GraftError", "IdempotencyKeyReused", "InvalidPipeline", "InvalidRequest",
+    "NetworkError", "NotFound", "RateLimited", "RequestTimeout", "ServerError", "Unauthorized",
+    "Branch", "BranchPage", "Event", "EventPage", "Health", "Run", "StepRun", "StepSpec",
 ]

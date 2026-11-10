@@ -35,6 +35,30 @@ jobs:
       - run: test -z "$(gofmt -l service kernel)" || (gofmt -l service kernel; exit 1)
       - run: cd service && go vet ./... && go test -race -count=1 ./...
 
+  sdk-drift:
+    # Regenerate the SDK models from the contract; fail if they differ from what is committed.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: python -m venv sdk/python/.venv && sdk/python/.venv/bin/pip install -e 'sdk/python[codegen]'
+      - run: make drift-check
+
+  sdk-typing:
+    # mypy --strict and pyright strict on the library and tests, no Any in the public API,
+    # and the built wheel type-checked from a clean venv, as a user would install it.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -e 'sdk/python[dev]'
+      - run: cd sdk/python && mypy
+      - run: cd sdk/python && pyright
+      - run: python scripts/no_any.py
+      - run: PYBIN=python ./scripts/check_wheel.sh
+
   sdk-unit:
     runs-on: ubuntu-latest
     strategy:
