@@ -1,6 +1,6 @@
 # graft-sdk (Python)
 
-Typed client for the Graft API, sync and async. Early (v0.4, not published to PyPI yet).
+Typed client for the Graft API, sync and async. Early (v0.5, not published to PyPI yet).
 
 ```python
 from graft import Graft, StepSpec
@@ -27,6 +27,8 @@ async with AsyncGraft(token="...") as g:
     br = await g.branches.create("demo", name="feat-x")
     async for b in g.branches.list("demo"):
         print(b.name)
+    async for ev in g.stream(run_id):            # websocket: replay, then live; resumes across drops
+        print(ev.seq, ev.type)
 ```
 
 `GRAFT_TOKEN` and `GRAFT_URL` are read from the environment if not passed.
@@ -36,6 +38,7 @@ async with AsyncGraft(token="...") as g:
 - **Models generated from the contract** (`_models.py`, by `scripts/gen_models.sh`). CI regenerates them and fails on any difference. Unknown fields from a newer server are ignored, so an older SDK keeps working.
 - **Typed errors** chosen from the problem `type`, each with `request_id`: `NotFound`, `Conflict`, `InvalidRequest`, `InvalidPipeline`, `IdempotencyKeyReused`, `RateLimited` (with `retry_after`), `ServerError`, `Unauthorized`; plus `NetworkError` and `RequestTimeout` when there is no response. All are `GraftError`.
 - **Retries with full jitter, only when safe**: GET, and POST with an `Idempotency-Key`. Every create sends a fresh key and reuses it across its own retries, so a retried create never makes two. `Retry-After` is honoured. Turn retries off with `retry=RetryPolicy(max_retries=0)` (from `graft._retry`).
+- **Realtime, async only**: `AsyncGraft.stream(run_id, after=0)` reconnects with backoff and jitter and resumes after the last seq it yielded; duplicates are dropped and holes are never yielded past (`stream.stats`). See docs/realtime.md for close codes.
 - **Explicit timeouts**: connect 5 s, read and write 30 s.
 - **Strict typing**: `mypy --strict` and pyright strict pass on the library and tests; no `Any` in the public API (`scripts/no_any.py`); `py.typed` ships in the wheel, and CI type-checks a sample app against the installed wheel.
 

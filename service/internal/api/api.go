@@ -4,6 +4,7 @@
 package api
 
 import (
+	"bufio"
 	"context"
 	"crypto/rand"
 	"crypto/subtle"
@@ -13,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -22,6 +24,7 @@ import (
 
 	"graft/service/internal/sched"
 	"graft/service/internal/store"
+	"graft/service/internal/stream"
 )
 
 const maxBody = 1 << 20
@@ -33,6 +36,7 @@ type Server struct {
 	Version string
 	Now     func() time.Time
 	Log     *slog.Logger
+	Hub     *stream.Hub
 
 	idemBeforeStore func() // tests only: runs after a keyed handler, before its key is stored
 }
@@ -57,6 +61,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /v1/branches/{id}/runs", s.auth(s.idempotent(s.createRun)))
 	mux.Handle("GET /v1/runs/{id}", s.auth(s.getRun))
 	mux.Handle("GET /v1/runs/{id}/events", s.auth(s.listRunEvents))
+	mux.Handle("GET /v1/stream", s.auth(s.stream))
 	return s.requestID(mux)
 }
 
@@ -88,6 +93,19 @@ type statusRecorder struct {
 }
 
 func (r *statusRecorder) WriteHeader(code int) { r.status = code; r.ResponseWriter.WriteHeader(code) }
+
+// Hijack and Unwrap let a websocket upgrade (and http.ResponseController) reach the
+// real connection through this wrapper.
+func (r *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	h, ok := r.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, errors.New("response writer cannot hijack")
+	}
+	r.status = http.StatusSwitchingProtocols
+	return h.Hijack()
+}
+
+func (r *statusRecorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }
 
 func reqID(r *http.Request) string { id, _ := r.Context().Value(ctxKey{}).(string); return id }
 

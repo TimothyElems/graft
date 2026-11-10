@@ -83,7 +83,7 @@ jobs:
         with: { python-version: "3.12" }
       - run: docker compose up --build --detach --wait
       - run: pip install -e 'sdk/python[dev]'
-      - run: cd sdk/python && python -m pytest tests/e2e -v
+      - run: cd sdk/python && python -m pytest tests/e2e tests/chaos -v -s
       - if: failure()
         run: docker compose logs graftd
       - if: always()

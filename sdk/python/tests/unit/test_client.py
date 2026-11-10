@@ -187,7 +187,8 @@ def test_both_clients_have_the_same_public_methods() -> None:
     for sync_cls, async_cls in pairs:
         s = {n for n in dir(sync_cls) if not n.startswith("_")}
         a = {n for n in dir(async_cls) if not n.startswith("_")}
-        assert s - {"close"} == a - {"aclose"}, (sync_cls.__name__, s ^ a)
+        # stream is async-only by design: a blocking websocket iterator would hold a thread.
+        assert s - {"close"} == a - {"aclose", "stream"}, (sync_cls.__name__, s ^ a)
         for name in s - {"close"}:
             sp = inspect.signature(getattr(sync_cls, name)).parameters
             ap = inspect.signature(getattr(async_cls, name)).parameters

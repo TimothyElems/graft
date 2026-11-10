@@ -26,9 +26,10 @@ import (
 	"graft/service/internal/db"
 	"graft/service/internal/queue"
 	"graft/service/internal/sched"
+	"graft/service/internal/stream"
 )
 
-var version = "v0.3.0-dev"
+var version = "v0.5.0-dev"
 
 func main() {
 	health := flag.Bool("healthcheck", false, "GET /healthz on this machine and exit")
@@ -77,7 +78,9 @@ func main() {
 		w := &queue.Worker{Pool: pool, Shell: shell, Owner: fmt.Sprintf("%s-%d-w%d", host, os.Getpid(), i), Log: log}
 		go w.Run(ctx)
 	}
-	srv := api.New(api.Server{Pool: pool, Shell: shell, Token: token, Version: version, Log: log})
+	hub := &stream.Hub{Pool: pool, Log: log}
+	go hub.Run(ctx)
+	srv := api.New(api.Server{Pool: pool, Shell: shell, Token: token, Version: version, Log: log, Hub: hub})
 
 	hs := &http.Server{Addr: addr, Handler: srv.Handler(), ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second}

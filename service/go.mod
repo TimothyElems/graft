@@ -5,7 +5,9 @@ go 1.24.0
 toolchain go1.24.5
 
 require (
+	github.com/coder/websocket v1.8.15
 	github.com/jackc/pgx/v5 v5.8.0
+	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
 	graft/kernel v0.0.0
 )
 

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+from typing import Literal
 
 from typing_extensions import assert_type
 
@@ -55,6 +56,12 @@ async def async_app() -> None:
             assert_type(b, Branch)
         async for e in g.runs.events(run.id):
             assert_type(e, Event)
+        stream = g.stream(run.id, after=0)
+        async for e in stream:
+            assert_type(e, Event)
+            assert_type(e.type, Literal["run_started", "step_started", "step_succeeded", "step_failed",
+                                        "step_retry", "step_skipped", "step_cancelled", "run_finished"])
+        assert_type(stream.stats.duplicates_dropped, int)
 
 
 if __name__ == "__main__":

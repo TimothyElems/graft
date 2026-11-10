@@ -2,7 +2,7 @@
 
 A Go service that runs migration pipelines on short-lived database branches, and a typed Python SDK for it. One contract joins them.
 
-Graft is an independent learning project, and it is early. v0.1 (contract and scheduling core), v0.2 (walking skeleton), v0.3 (Postgres queue, leases, event log) and v0.4 (the Python SDK: generated models, sync and async, strict typing) exist. Everything else below is marked **planned**.
+Graft is an independent learning project, and it is early. v0.1 (contract and scheduling core), v0.2 (walking skeleton), v0.3 (Postgres queue, leases, event log), v0.4 (the Python SDK: generated models, sync and async, strict typing) and v0.5 (realtime: a resumable websocket stream) exist. Everything else below is marked **planned**.
 
 **Live demo:** https://graft-demo.fly.dev ([`/healthz`](https://graft-demo.fly.dev/healthz) is public; `/v1` needs a token). It still runs **v0.2** (in-memory, no database attached), so its state resets whenever the machine sleeps. It is not production.
 
@@ -14,7 +14,7 @@ Graft is an independent learning project, and it is early. v0.1 (contract and sc
 | v0.2 | Walking skeleton: Go HTTP service, fake runner over the kernel, sync Python SDK, end-to-end tests against `docker compose`, run in CI | **Done** |
 | v0.3 | Postgres: migrations, job queue (`SKIP LOCKED`) with leases and heartbeat, gap-free event log written with each state change, cursor pages, Idempotency-Key | **Done** ([what is not](#not-built-yet)) |
 | v0.4 | Python SDK: models generated from the contract with a drift gate, sync and async clients, typed errors, pagination iterators, retries with jitter on safe calls, mypy strict + pyright strict, wheel checked from a clean venv | **Done** |
-| v0.5 | Realtime websocket with resume after `seq`, chaos test | Planned |
+| v0.5 | Realtime: `/v1/stream` websocket (replay after a seq, then live, via Postgres NOTIFY), slow-consumer protection, SDK `AsyncGraft.stream()` with reconnect and resume, chaos test | **Done** ([docs/realtime.md](docs/realtime.md)) |
 | v0.6 | Sandboxed Docker step runner, real clock shell, crash recovery, metrics/tracing, `graft.toml` | Planned |
 | v0.7 | Support kit: `graft doctor`, repro bundles, ten case files | Planned |
 | v0.8 | Release automation, v1 → v2 migration with codemod, `llms.txt` | Planned |
@@ -53,13 +53,15 @@ docs/kernel-map.md           where each scheduling rule lives in the Go and Pyth
 - **SDK** (`make test-sdk`, Python 3.10 and 3.13 in CI): every unit test runs on the sync AND the async client; errors are chosen by problem `type`; pagination is lazy and stops on a repeated cursor; retries happen only on GET and keyed POSTs, with the same Idempotency-Key on every attempt, against a flaky fake server.
 - **Drift gate** (`make drift-check`): CI regenerates `sdk/python/src/graft/_models.py` from the contract and fails on any difference.
 - **Typing** (`make sdk-typing`, `make check-wheel`): mypy `--strict` and pyright strict pass on the library and tests; `scripts/no_any.py` fails on `Any` in any public signature; the built wheel is installed alone in a fresh venv and a sample app is type-checked against it.
+- **Realtime** (`service/internal/api/stream_test.go`, `sdk/python/tests/unit/test_stream.py`): replay equals the event log and every frame matches `events.schema.json`; `after=5` starts at 6; live events arrive through NOTIFY with polling disabled; a stalled reader is disconnected without slowing another reader or the worker; the client dedupes, never yields past a hole, and gives up only after repeated failures with no progress.
+- **Chaos** (`sdk/python/tests/chaos/test_stream.py`): a proxy cuts the stream 200 times during a 502-event run; the client's events equal the server's log, with 0 duplicates and 0 gaps.
 - **End to end** (`make e2e`, or `make e2e-compose`, which is what CI runs): the SDK, sync and async, against a real `graftd` and Postgres, and every raw response checked against `contract/openapi.yaml`.
 
 ## Not built yet
 
 - No real step execution: the fake runner scripts outcomes from `command: ["graft-fake", "fail:10", "ok:10"]` and treats any other command as "succeeds in 10 ms". The Docker runner arrives in v0.6.
 - A static bearer token, not JWT.
-- Delete, cancel, the repro bundle and the websocket stream are in the contract but not built.
+- Delete, cancel and the repro bundle are in the contract but not built. The stream is per run; a branch-wide stream would need its own sequence.
 - The live demo has not been moved to v0.3 (it needs a database).
 
 ## Python SDK

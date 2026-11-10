@@ -22,6 +22,9 @@ import (
 	"graft/service/internal/db"
 )
 
+// Channel is the Postgres NOTIFY channel Append signals on, with the run id as payload.
+const Channel = "graft_events"
+
 // Event is one row of the events table, in the contract's shape.
 type Event struct {
 	ID       string    `json:"id"`
@@ -70,6 +73,10 @@ func Append(ctx context.Context, tx pgx.Tx, runID, branchID string, evs []New) (
 		             VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, ''), $8, NULLIF($9, ''))`,
 			newID(), runID, branchID, first+i, e.Type, e.AtMs, e.Step, e.Attempt, e.Reason)
 	}
+	// Wake stream subscribers. NOTIFY is transactional: Postgres delivers it only if
+	// this transaction commits, and after the rows are visible. The payload is a hint
+	// (which run); subscribers always read the events themselves, by seq.
+	batch.Queue(`SELECT pg_notify($1, $2)`, Channel, runID)
 	if err := tx.SendBatch(ctx, batch).Close(); err != nil {
 		return 0, err
 	}

@@ -160,27 +160,42 @@ paths:
   /v1/stream:
     get:
       operationId: stream
-      summary: Websocket of events for one branch
+      summary: Websocket of one run's events, replayed then live
       description: |
         Upgrade to a websocket. Each text frame is one Event (events.schema.json).
-        Connect with `?branch=<id>&after=<seq>` to resume; the server replays
-        everything after that seq, then goes live. A client that reconnects with its
-        last seq sees no gaps and no duplicates.
+        Connect with `?run=<id>&after=<seq>`: the server sends every event with seq > after,
+        oldest first, then each new one as it is written, and closes with 1000 after
+        run_finished. A client that reconnects with the last seq it saw gets no gaps and
+        no duplicates.
+
+        Per run, not per branch: seq is per run (every run starts at 1), so a branch-wide
+        resume point would need its own sequence. That is not built.
+
+        Errors before the upgrade are ordinary problem+json responses (401, 404, 422).
+        After the upgrade, the close code says what to do (see docs/realtime.md):
+        1000 done; 1001, 1006, 1011, 4008 reconnect with backoff from the last seq.
         OpenAPI cannot describe websocket frames, so the frame schema is given in x-websocket.
       parameters:
-        - name: branch
+        - name: run
           in: query
           required: true
-          schema: { type: string }
+          schema: { type: string, pattern: "^run_[A-Za-z0-9_]+$" }
         - name: after
           in: query
           schema: { type: integer, minimum: 0, default: 0 }
       responses:
         "101": { description: Switching protocols }
         "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
       x-websocket:
         frame:
           $ref: "./events.schema.json"
+        close_codes:
+          "1000": run finished; every event was sent. Stop.
+          "1001": server shutting down. Reconnect with after=<last seq>.
+          "1011": server error. Reconnect with backoff.
+          "4008": slow consumer; the client did not read fast enough. Reconnect with after=<last seq>.
 components:
   securitySchemes:
     bearerJwt:

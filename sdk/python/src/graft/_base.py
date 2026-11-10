@@ -16,7 +16,7 @@ import httpx
 from ._models import CreateBranch, CreateRun
 from .models import StepSpec
 
-__version__ = "0.4.0.dev0"
+__version__ = "0.5.0.dev0"
 
 DEFAULT_BASE_URL = "http://localhost:8080"
 # Explicit, documented timeouts. A client with no read timeout hangs forever on a

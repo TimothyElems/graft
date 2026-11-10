@@ -11,6 +11,7 @@ import httpx
 from ._base import DEFAULT_TIMEOUT, Request, default_headers, resolve_config
 from ._base import build as _build
 from ._retry import RetryPolicy, is_retryable, is_safe, retry_after
+from ._stream import EventStream
 from .errors import GraftError, NetworkError, RequestTimeout, from_response
 from ._pagination import AsyncPager, events_next
 from .models import Branch, BranchPage, Event, EventPage, Health, Run, StepSpec
@@ -32,6 +33,7 @@ class AsyncGraft:
                  timeout: httpx.Timeout | float = DEFAULT_TIMEOUT,
                  transport: httpx.AsyncBaseTransport | None = None, retry: RetryPolicy | None = None) -> None:
         token, self.base_url = resolve_config(token, base_url)
+        self._token = token
         self.retry = retry or RetryPolicy()
         self._http = httpx.AsyncClient(base_url=self.base_url, timeout=timeout, transport=transport,
                                        headers=default_headers(token))
@@ -47,6 +49,18 @@ class AsyncGraft:
     async def __aexit__(self, exc_type: type[BaseException] | None, exc: BaseException | None,
                         tb: TracebackType | None) -> None:
         await self.aclose()
+
+    def stream(self, run_id: str, *, after: int = 0, max_failures: int = 10) -> EventStream:
+        """A run's events over a websocket: replayed after `after`, then live, ending after run_finished.
+
+        Reconnects on drops with backoff and jitter, resuming from the last seq it yielded.
+        Async only: a blocking iterator would tie up a thread for the whole run (the sync
+        client has runs.events() for polling).
+
+        >>> async for ev in g.stream(run.id):  # doctest: +SKIP
+        ...     print(ev.seq, ev.type)
+        """
+        return EventStream(self.base_url, self._token, run_id, after, self.retry, max_failures=max_failures)
 
     async def health(self) -> Health:
         """Liveness and queue depth."""

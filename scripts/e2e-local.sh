@@ -39,7 +39,7 @@ start() {
 }
 start
 
-(cd sdk/python && GRAFT_E2E=1 GRAFT_URL="http://127.0.0.1:$PORT" GRAFT_TOKEN=$TOKEN "../../$PY" -m pytest tests/e2e -v "$@")
+(cd sdk/python && GRAFT_E2E=1 GRAFT_URL="http://127.0.0.1:$PORT" GRAFT_TOKEN=$TOKEN "../../$PY" -m pytest tests/e2e tests/chaos -v -s "$@")
 
 echo "--- restart check: a finished run must still be there after graftd restarts"
 api() { curl -sf -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' "$@"; }

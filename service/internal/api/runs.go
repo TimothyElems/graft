@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"regexp"
 	"strconv"
+	"time"
 
 	"graft/service/internal/events"
 	"graft/service/internal/store"
@@ -199,4 +200,37 @@ func (s *Server) listRunEvents(w http.ResponseWriter, r *http.Request) {
 		out.LastSeq = evs[len(evs)-1].Seq
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// stream checks everything that can fail as a plain HTTP problem BEFORE the upgrade,
+// so a client gets 401/404/422 it can act on, not a mysterious close code.
+func (s *Server) stream(w http.ResponseWriter, r *http.Request) {
+	id := r.URL.Query().Get("run")
+	if !runID.MatchString(id) {
+		invalid(w, r, "run is required and must look like run_...")
+		return
+	}
+	after := 0
+	if v := r.URL.Query().Get("after"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 {
+			invalid(w, r, "after must be an integer >= 0")
+			return
+		}
+		after = n
+	}
+	if _, err := store.GetRun(r.Context(), s.Pool, id); errors.Is(err, store.ErrNotFound) {
+		problem(w, r, http.StatusNotFound, "not-found", "Run not found", fmt.Sprintf("No run %s.", id))
+		return
+	} else if err != nil {
+		s.internal(w, r, err)
+		return
+	}
+	// The server's read/write timeouts are deadlines on the connection, and they survive
+	// a hijack: left alone, every stream would be cut after WriteTimeout. Clear them;
+	// the hub enforces its own per-frame write deadline instead.
+	rc := http.NewResponseController(w)
+	_ = rc.SetReadDeadline(time.Time{})
+	_ = rc.SetWriteDeadline(time.Time{})
+	s.Hub.Serve(w, r, id, after)
 }

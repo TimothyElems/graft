@@ -17,6 +17,7 @@ import (
 	"graft/service/internal/queue"
 	"graft/service/internal/sched"
 	"graft/service/internal/store"
+	"graft/service/internal/stream"
 )
 
 const token = "test-token-0123456789"
@@ -32,7 +33,11 @@ func newTestWith(t *testing.T, adjust func(*Server)) (*httptest.Server, *pgxpool
 	done := make(chan struct{})
 	go func() { w.Run(ctx); close(done) }()
 	t.Cleanup(func() { cancel(); <-done }) // stop the worker before the database is dropped
-	s := New(Server{Pool: pool, Shell: shell, Token: token,
+	hub := &stream.Hub{Pool: pool, Poll: 200 * time.Millisecond}
+	hubDone := make(chan struct{})
+	go func() { hub.Run(ctx); close(hubDone) }()
+	t.Cleanup(func() { cancel(); <-hubDone })
+	s := New(Server{Pool: pool, Shell: shell, Token: token, Hub: hub,
 		Log: slog.New(slog.NewTextHandler(testLog{t}, &slog.HandlerOptions{Level: slog.LevelError}))})
 	if adjust != nil {
 		adjust(s)

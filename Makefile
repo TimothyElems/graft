@@ -42,7 +42,7 @@ e2e:              ## graftd binary + SDK e2e tests, no Docker needed
 
 e2e-compose:      ## the same tests against `docker compose up` (what CI runs)
 	docker compose up --build --detach --wait
-	cd sdk/python && GRAFT_E2E=1 GRAFT_TOKEN=local-dev-token-change-me .venv/bin/python -m pytest tests/e2e -v; s=$$?; cd ../.. && docker compose down; exit $$s
+	cd sdk/python && GRAFT_E2E=1 GRAFT_TOKEN=local-dev-token-change-me .venv/bin/python -m pytest tests/e2e tests/chaos -v -s; s=$$?; cd ../.. && docker compose down; exit $$s
 
 sdk-typing:       ## mypy --strict, pyright strict, no Any in the public API
 	cd sdk/python && .venv/bin/mypy && .venv/bin/pyright
