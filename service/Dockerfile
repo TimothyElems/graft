@@ -1,5 +1,5 @@
 # Build context is the repo root: the service imports the kernel module from ../kernel.
-FROM golang:1.24-bookworm AS build
+FROM golang:1.26-bookworm AS build
 WORKDIR /src
 COPY kernel/ kernel/
 COPY service/ service/
