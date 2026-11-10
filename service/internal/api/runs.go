@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"graft/service/internal/events"
+	"graft/service/internal/sched"
 	"graft/service/internal/store"
 )
 
@@ -86,7 +87,7 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Refuse a bad pipeline now, with the kernel's own error, rather than accept it and fail later.
-	if _, err := s.Shell.Case(spec.Steps, spec.Concurrency); err != nil {
+	if err := sched.Validate(spec); err != nil {
 		problem(w, r, http.StatusUnprocessableEntity, "invalid-pipeline", "Invalid pipeline", err.Error())
 		return
 	}
@@ -233,4 +234,33 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request) {
 	_ = rc.SetReadDeadline(time.Time{})
 	_ = rc.SetWriteDeadline(time.Time{})
 	s.Hub.Serve(w, r, id, after)
+}
+
+// cancelRun asks the worker running this run to stop (rule 5: what finishes before the
+// cancel takes effect counts; everything else is cancelled). Safe to repeat. A queued
+// run is cancelled at time 0 when a worker picks it up; a finished run is returned
+// unchanged with 202 (contract gap 6: decided as "accepted, nothing to do").
+func (s *Server) cancelRun(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if !runID.MatchString(id) {
+		problem(w, r, http.StatusNotFound, "not-found", "Run not found", fmt.Sprintf("No run %s.", id))
+		return
+	}
+	tag, err := s.Pool.Exec(r.Context(), `UPDATE runs SET cancel_requested = true
+		WHERE id = $1 AND status IN ('queued', 'running')`, id)
+	if err != nil {
+		s.internal(w, r, err)
+		return
+	}
+	_ = tag
+	run, err := store.GetRun(r.Context(), s.Pool, id)
+	if errors.Is(err, store.ErrNotFound) {
+		problem(w, r, http.StatusNotFound, "not-found", "Run not found", fmt.Sprintf("No run %s.", id))
+		return
+	}
+	if err != nil {
+		s.internal(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, toRun(run))
 }

@@ -23,6 +23,7 @@ import (
 	"graft/service/internal/events"
 	"graft/service/internal/pgtest"
 	"graft/service/internal/queue"
+	"graft/service/internal/runner"
 	"graft/service/internal/sched"
 	"graft/service/internal/stream"
 )
@@ -47,14 +48,14 @@ func newStreamEnv(t *testing.T, o envOpts) *streamEnv {
 	pool := pgtest.New(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	hubCtx, stopHub := context.WithCancel(ctx)
-	shell := sched.Shell{Runner: sched.FakeRunner{}}
-	w := &queue.Worker{Pool: pool, Shell: shell, Owner: "test-worker", Idle: 5 * time.Millisecond}
+	clock := sched.Clock{Runner: runner.Script{}}
+	w := &queue.Worker{Pool: pool, Clock: clock, Owner: "test-worker", Idle: 5 * time.Millisecond}
 	hub := &stream.Hub{Pool: pool, Poll: o.hubPoll, WriteTimeout: o.writeTimeout,
 		Log: slog.New(slog.NewTextHandler(testLog{t}, nil))}
 	wDone, hDone := make(chan struct{}), make(chan struct{})
 	go func() { w.Run(ctx); close(wDone) }()
 	go func() { hub.Run(hubCtx); close(hDone) }()
-	ts := httptest.NewUnstartedServer(New(Server{Pool: pool, Shell: shell, Token: token, Hub: hub}).Handler())
+	ts := httptest.NewUnstartedServer(New(Server{Pool: pool, Token: token, Hub: hub}).Handler())
 	var sl *stallListener
 	if o.stall {
 		sl = &stallListener{Listener: ts.Listener}

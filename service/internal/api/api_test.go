@@ -15,6 +15,7 @@ import (
 
 	"graft/service/internal/pgtest"
 	"graft/service/internal/queue"
+	"graft/service/internal/runner"
 	"graft/service/internal/sched"
 	"graft/service/internal/store"
 	"graft/service/internal/stream"
@@ -28,8 +29,8 @@ func newTestWith(t *testing.T, adjust func(*Server)) (*httptest.Server, *pgxpool
 	t.Helper()
 	pool := pgtest.New(t)
 	ctx, cancel := context.WithCancel(context.Background())
-	shell := sched.Shell{Runner: sched.FakeRunner{}}
-	w := &queue.Worker{Pool: pool, Shell: shell, Owner: "test-worker", Idle: 5 * time.Millisecond}
+	clock := sched.Clock{Runner: runner.Script{}}
+	w := &queue.Worker{Pool: pool, Clock: clock, Owner: "test-worker", Idle: 5 * time.Millisecond}
 	done := make(chan struct{})
 	go func() { w.Run(ctx); close(done) }()
 	t.Cleanup(func() { cancel(); <-done }) // stop the worker before the database is dropped
@@ -37,7 +38,7 @@ func newTestWith(t *testing.T, adjust func(*Server)) (*httptest.Server, *pgxpool
 	hubDone := make(chan struct{})
 	go func() { hub.Run(ctx); close(hubDone) }()
 	t.Cleanup(func() { cancel(); <-hubDone })
-	s := New(Server{Pool: pool, Shell: shell, Token: token, Hub: hub,
+	s := New(Server{Pool: pool, Token: token, Hub: hub,
 		Log: slog.New(slog.NewTextHandler(testLog{t}, &slog.HandlerOptions{Level: slog.LevelError}))})
 	if adjust != nil {
 		adjust(s)
@@ -224,8 +225,10 @@ func TestCreateRunIsQueuedThenFinishedByTheKernel(t *testing.T) {
 	}
 	m := done["steps"].([]any)[0].(map[string]any)
 	s := done["steps"].([]any)[1].(map[string]any)
-	// fixture 03's timeline: start 0, fail 10, start 15, fail 25, start 30, ok 40
-	if m["attempts"] != float64(3) || m["finished_ms"] != float64(40) || s["started_ms"] != float64(40) {
+	// fixture 03's timeline, now in REAL time: start 0, fail 10, start 15, fail 25, start 30, ok 40
+	// (plus a few ms of real overhead; the shell's equivalence tests bound the drift).
+	fm, ss := m["finished_ms"].(float64), s["started_ms"].(float64)
+	if m["attempts"] != float64(3) || fm < 40 || fm > 90 || ss < fm {
 		t.Fatalf("migrate %v seed %v", m, s)
 	}
 	// The kernel says reason "" for a success; the contract says null.

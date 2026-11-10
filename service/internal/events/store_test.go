@@ -122,8 +122,8 @@ func TestFinishIsAtomicWithItsEvents(t *testing.T) {
 	_, _ = pool.Exec(ctx, "INSERT INTO events (id, run_id, branch_id, seq, type, at_ms) VALUES ('evt_x', 'run_e', 'br_e', 1, 'run_started', 0)")
 
 	spec := store.RunSpec{Concurrency: 1, Steps: []store.StepSpec{{ID: "a", MaxAttempts: 1}}}
-	res, _ := sched.Shell{Runner: sched.FakeRunner{}}.Execute(spec)
-	err := queue.Finish(ctx, pool, "run_e", "br_e", "w", spec, &res, nil)
+	res, _ := sched.Simulate(spec)
+	err := queue.Finish(ctx, pool, "run_e", "br_e", "w", spec, &res, res.Events, nil)
 	if err == nil {
 		t.Fatal("Finish should fail on the planted duplicate seq")
 	}

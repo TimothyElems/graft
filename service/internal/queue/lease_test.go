@@ -13,10 +13,10 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"graft/kernel/pipeline"
 	"graft/service/internal/db"
 	"graft/service/internal/pgtest"
 	"graft/service/internal/queue"
+	"graft/service/internal/runner"
 	"graft/service/internal/sched"
 	"graft/service/internal/store"
 )
@@ -37,13 +37,15 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-// blockRunner simulates a step that runs for a very long time.
+// blockRunner simulates a step that runs for a very long time (until cancelled).
 type blockRunner struct{}
 
-func (blockRunner) Script(store.StepSpec) ([]pipeline.Attempt, error) {
-	time.Sleep(time.Hour)
-	return nil, nil
+func (blockRunner) Run(ctx context.Context, _ runner.Attempt) (runner.Result, error) {
+	<-ctx.Done()
+	return runner.Result{Outcome: runner.Cancelled}, nil
 }
+
+func (blockRunner) Cleanup(context.Context, string) error { return nil }
 
 func leaseChild() {
 	ctx := context.Background()
@@ -52,7 +54,7 @@ func leaseChild() {
 		os.Stderr.WriteString(err.Error())
 		os.Exit(3)
 	}
-	w := &queue.Worker{Pool: pool, Shell: sched.Shell{Runner: blockRunner{}}, Owner: "child",
+	w := &queue.Worker{Pool: pool, Clock: sched.Clock{Runner: blockRunner{}}, Owner: "child",
 		Lease: testLease, Heartbeat: testHeartbeat}
 	_, _ = w.Step(ctx) // claims the run, heartbeats, and blocks in the "long step" until killed
 }
@@ -178,16 +180,22 @@ func TestKillNineWorkerRunIsReclaimedAndFinishesExactlyOnce(t *testing.T) {
 	}
 
 	// 6. The dead worker's result can never land: its owner no longer holds the lease.
-	res, _ := sched.Shell{Runner: sched.FakeRunner{}}.Execute(spec)
-	if err := queue.Finish(ctx, pool, "run_kill", "br_l", "child", spec, &res, nil); !errors.Is(err, queue.ErrLeaseLost) {
+	res, _ := sched.Simulate(spec)
+	if err := queue.Finish(ctx, pool, "run_kill", "br_l", "child", spec, &res, res.Events, nil); !errors.Is(err, queue.ErrLeaseLost) {
 		t.Fatalf("stale owner's Finish: got %v, want ErrLeaseLost", err)
 	}
 
-	// 7. The new owner finishes it, exactly once.
-	if err := queue.Finish(ctx, pool, "run_kill", "br_l", "parent", spec, &res, nil); err != nil {
+	// 7. The new owner finishes it, exactly once. The dead worker had already written
+	// some events live (run_started, step_started); they stay, and seq continues after them.
+	var before int
+	_ = pool.QueryRow(ctx, "SELECT count(*) FROM events WHERE run_id = 'run_kill'").Scan(&before)
+	if before < 1 {
+		t.Fatalf("the child wrote no events live (%d)", before)
+	}
+	if err := queue.Finish(ctx, pool, "run_kill", "br_l", "parent", spec, &res, res.Events, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := queue.Finish(ctx, pool, "run_kill", "br_l", "parent", spec, &res, nil); !errors.Is(err, queue.ErrLeaseLost) {
+	if err := queue.Finish(ctx, pool, "run_kill", "br_l", "parent", spec, &res, res.Events, nil); !errors.Is(err, queue.ErrLeaseLost) {
 		t.Fatalf("second Finish: got %v, want ErrLeaseLost (already finished)", err)
 	}
 	var status string
@@ -198,7 +206,8 @@ func TestKillNineWorkerRunIsReclaimedAndFinishesExactlyOnce(t *testing.T) {
 		(SELECT coalesce(max(seq), 0) FROM events WHERE run_id = r.id),
 		(SELECT count(*) FROM events WHERE run_id = r.id AND type = 'run_finished')
 		FROM runs r WHERE id = 'run_kill'`).Scan(&status, &steps, &evs, &maxSeq, &runFinished)
-	if status != "succeeded" || steps != 2 || evs != len(res.Events)+1 || maxSeq != evs || runFinished != 1 {
+	t.Logf("events: %d written live by the killed worker, %d by the new owner; seq 1..%d", before, len(res.Events), maxSeq)
+	if status != "succeeded" || steps != 2 || evs != before+len(res.Events) || maxSeq != evs || runFinished != 1 {
 		t.Fatalf("status=%s step_runs=%d events=%d max_seq=%d run_finished=%d", status, steps, evs, maxSeq, runFinished)
 	}
 }
@@ -214,7 +223,7 @@ func TestHeartbeatReportsALostLease(t *testing.T) {
 	if c, _ := queue.Claim(ctx, pool, "b", time.Minute); c == nil || c.Claims != 2 {
 		t.Fatalf("b should reclaim the lapsed run, got %+v", c)
 	}
-	if err := queue.Extend(ctx, pool, "run_steal", "a", time.Minute); !errors.Is(err, queue.ErrLeaseLost) {
+	if _, err := queue.Extend(ctx, pool, "run_steal", "a", time.Minute); !errors.Is(err, queue.ErrLeaseLost) {
 		t.Fatalf("a's heartbeat after losing the lease: got %v, want ErrLeaseLost", err)
 	}
 	if r := row(t, pool, "run_steal"); *r.Owner != "b" {
@@ -223,7 +232,7 @@ func TestHeartbeatReportsALostLease(t *testing.T) {
 	lost := make(chan error, 1)
 	hb, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	go queue.Heartbeat(hb, pool, "run_steal", "a", time.Minute, 50*time.Millisecond, func(err error) { lost <- err })
+	go queue.Heartbeat(hb, pool, "run_steal", "a", time.Minute, 50*time.Millisecond, time.Hour, func(err error) { lost <- err }, func() {})
 	select {
 	case err := <-lost:
 		if !errors.Is(err, queue.ErrLeaseLost) {
@@ -238,7 +247,7 @@ func TestWorkerStepRunsTheKernelAndRecordsIt(t *testing.T) {
 	ctx := context.Background()
 	pool, _ := freshDB(t)
 	seedRun(t, pool, "run_ok")
-	w := &queue.Worker{Pool: pool, Shell: sched.Shell{Runner: sched.FakeRunner{}}, Owner: "w1"}
+	w := &queue.Worker{Pool: pool, Clock: sched.Clock{Runner: runner.Script{}}, Owner: "w1"}
 	did, err := w.Step(ctx)
 	if !did || err != nil {
 		t.Fatalf("did=%v err=%v", did, err)
@@ -250,8 +259,9 @@ func TestWorkerStepRunsTheKernelAndRecordsIt(t *testing.T) {
 	var attempts, finished int64
 	_ = pool.QueryRow(ctx, "SELECT attempts, finished_ms FROM step_runs WHERE run_id='run_ok' AND step_id='migrate'").
 		Scan(&attempts, &finished)
-	if attempts != 2 || finished != 20 {
-		t.Fatalf("migrate attempts=%d finished_ms=%d; want 2 and 20 (fail at 10, retry ok at 20)", attempts, finished)
+	// Real time now: fail after ~10 ms, retry ok after another ~10 ms.
+	if attempts != 2 || finished < 20 || finished > 200 {
+		t.Fatalf("migrate attempts=%d finished_ms=%d; want 2 and about 20 (fail at ~10, retry ok at ~20)", attempts, finished)
 	}
 	if did, _ := w.Step(ctx); did {
 		t.Fatal("queue should be empty")

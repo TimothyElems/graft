@@ -12,6 +12,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base32"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -66,6 +67,11 @@ func Append(ctx context.Context, tx pgx.Tx, runID, branchID string, evs []New) (
 		runID, len(evs)).Scan(&last); err != nil {
 		return 0, fmt.Errorf("bump event_seq for %s: %w", runID, err)
 	}
+	return last, insert(ctx, tx, runID, branchID, last, evs)
+}
+
+// insert writes evs as seq last-len+1 .. last, and wakes stream subscribers.
+func insert(ctx context.Context, tx pgx.Tx, runID, branchID string, last int, evs []New) error {
 	first := last - len(evs) + 1
 	batch := &pgx.Batch{}
 	for i, e := range evs {
@@ -77,20 +83,38 @@ func Append(ctx context.Context, tx pgx.Tx, runID, branchID string, evs []New) (
 	// this transaction commits, and after the rows are visible. The payload is a hint
 	// (which run); subscribers always read the events themselves, by seq.
 	batch.Queue(`SELECT pg_notify($1, $2)`, Channel, runID)
-	if err := tx.SendBatch(ctx, batch).Close(); err != nil {
-		return 0, err
-	}
-	return last, nil
+	return tx.SendBatch(ctx, batch).Close()
 }
 
-// AppendKernel records a finished run: run_started, then every kernel event in order.
-func AppendKernel(ctx context.Context, tx pgx.Tx, runID, branchID string, kevs []pipeline.Event) (int, error) {
-	evs := make([]New, 0, len(kevs)+1)
-	evs = append(evs, New{Type: "run_started"})
+// FromKernel converts kernel events to events to append.
+func FromKernel(kevs []pipeline.Event) []New {
+	evs := make([]New, 0, len(kevs))
 	for _, k := range kevs {
 		evs = append(evs, New{Type: k.Type, AtMs: k.AtMs, Step: k.Step, Attempt: k.Attempt, Reason: k.Reason})
 	}
-	return Append(ctx, tx, runID, branchID, evs)
+	return evs
+}
+
+// ErrNotOwner: the run is not running under this owner's lease any more.
+var ErrNotOwner = errors.New("run is not leased to this owner")
+
+// AppendFenced is Append for a worker: it only writes if `owner` still holds the
+// run's lease, so a worker that lost its lease cannot add events to a run another
+// worker now owns. The fence and the counter bump are the same UPDATE.
+func AppendFenced(ctx context.Context, tx pgx.Tx, runID, branchID, owner string, evs []New) (int, error) {
+	if len(evs) == 0 {
+		return 0, nil
+	}
+	var last int
+	err := tx.QueryRow(ctx, `UPDATE runs SET event_seq = event_seq + $3
+		WHERE id = $1 AND lease_owner = $2 AND status = 'running' RETURNING event_seq`, runID, owner, len(evs)).Scan(&last)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, ErrNotOwner
+	}
+	if err != nil {
+		return 0, err
+	}
+	return last, insert(ctx, tx, runID, branchID, last, evs)
 }
 
 // List returns a run's events with seq > after, oldest first, at most limit of them.

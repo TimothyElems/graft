@@ -22,7 +22,6 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"graft/service/internal/sched"
 	"graft/service/internal/store"
 	"graft/service/internal/stream"
 )
@@ -31,7 +30,6 @@ const maxBody = 1 << 20
 
 type Server struct {
 	Pool    *pgxpool.Pool
-	Shell   sched.Shell
 	Token   string
 	Version string
 	Now     func() time.Time
@@ -60,6 +58,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /v1/branches/{id}", s.auth(s.getBranch))
 	mux.Handle("POST /v1/branches/{id}/runs", s.auth(s.idempotent(s.createRun)))
 	mux.Handle("GET /v1/runs/{id}", s.auth(s.getRun))
+	mux.Handle("POST /v1/runs/{id}/cancel", s.auth(s.cancelRun))
 	mux.Handle("GET /v1/runs/{id}/events", s.auth(s.listRunEvents))
 	mux.Handle("GET /v1/stream", s.auth(s.stream))
 	return s.requestID(mux)

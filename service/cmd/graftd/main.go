@@ -19,17 +19,20 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"sync"
 	"syscall"
 	"time"
 
 	"graft/service/internal/api"
 	"graft/service/internal/db"
+	"graft/service/internal/lifecycle"
 	"graft/service/internal/queue"
+	"graft/service/internal/runner"
 	"graft/service/internal/sched"
 	"graft/service/internal/stream"
 )
 
-var version = "v0.5.0-dev"
+var version = "v0.6.0-dev"
 
 func main() {
 	health := flag.Bool("healthcheck", false, "GET /healthz on this machine and exit")
@@ -72,15 +75,38 @@ func main() {
 	}
 	log.Info("migrations", "applied", applied)
 
-	shell := sched.Shell{Runner: sched.FakeRunner{}}
+	var run runner.Runner = runner.Script{}
+	if os.Getenv("GRAFT_RUNNER") == "docker" {
+		run = runner.Router{Fake: runner.Script{}, Real: runner.Docker{}}
+	}
+	clock := sched.Clock{Runner: run}
+	lease, err1 := durationEnv("GRAFT_LEASE", queue.DefaultLease)
+	beat, err2 := durationEnv("GRAFT_HEARTBEAT", queue.DefaultHeartbeat)
+	if err := errors.Join(err1, err2); err != nil {
+		log.Error("config", "err", err)
+		os.Exit(2)
+	}
+	grace, err3 := durationEnv("GRAFT_SHUTDOWN_GRACE", 10*time.Second)
+	deadline, err4 := durationEnv("GRAFT_SHUTDOWN_DEADLINE", 25*time.Second)
+	if err := errors.Join(err3, err4); err != nil {
+		log.Error("config", "err", err)
+		os.Exit(2)
+	}
+	// Two contexts: `ctx` (cancelled by SIGTERM) stops claiming; `work` (cancelled after
+	// the grace period) stops runs still in progress, which are then released.
+	work, stopWork := context.WithCancel(context.Background())
+	defer stopWork()
 	host, _ := os.Hostname()
+	var workersDone sync.WaitGroup
 	for i := 0; i < workers; i++ {
-		w := &queue.Worker{Pool: pool, Shell: shell, Owner: fmt.Sprintf("%s-%d-w%d", host, os.Getpid(), i), Log: log}
-		go w.Run(ctx)
+		w := &queue.Worker{Pool: pool, Clock: clock, Owner: fmt.Sprintf("%s-%d-w%d", host, os.Getpid(), i),
+			Lease: lease, Heartbeat: beat, Log: log}
+		workersDone.Add(1)
+		go func() { defer workersDone.Done(); w.RunUntil(ctx, work) }()
 	}
 	hub := &stream.Hub{Pool: pool, Log: log}
 	go hub.Run(ctx)
-	srv := api.New(api.Server{Pool: pool, Shell: shell, Token: token, Version: version, Log: log, Hub: hub})
+	srv := api.New(api.Server{Pool: pool, Token: token, Version: version, Log: log, Hub: hub})
 
 	hs := &http.Server{Addr: addr, Handler: srv.Handler(), ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second}
@@ -93,12 +119,23 @@ func main() {
 	}()
 
 	<-ctx.Done()
-	log.Info("shutting down")
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if err := hs.Shutdown(shutdownCtx); err != nil {
-		log.Error("shutdown", "err", err)
+	log.Info("shutting down: no new runs", "grace", grace, "deadline", deadline)
+	finished := make(chan struct{})
+	go func() { workersDone.Wait(); close(finished) }()
+	lifecycle.Shutdown(lifecycle.Plan{Grace: grace, Deadline: deadline, Log: log,
+		StopHTTP: hs.Shutdown, StopWork: stopWork, WorkersDone: finished, Exit: os.Exit})
+}
+
+func durationEnv(k string, def time.Duration) (time.Duration, error) {
+	v := os.Getenv(k)
+	if v == "" {
+		return def, nil
 	}
+	d, err := time.ParseDuration(v)
+	if err != nil || d <= 0 {
+		return 0, fmt.Errorf("%s=%q: want a positive duration like 30s", k, v)
+	}
+	return d, nil
 }
 
 func env(k, def string) string {

@@ -22,31 +22,35 @@ type Claimed struct {
 	Spec       []byte
 	Claims     int // 1 on the first claim; more means a worker died holding it
 	LeaseUntil time.Time
+	Was        string // status before this claim: queued (new or released) or running (lease lapsed)
 }
 
 // claimSQL takes the oldest claimable run: queued, or running with a lease that has
 // run out. SKIP LOCKED makes concurrent workers take different rows instead of
 // waiting for (or both taking) the same one. The lease time comes from the
-// database's clock, so every worker judges expiry by the same clock.
+// database's clock, so every worker judges expiry by the same clock. It also returns
+// the status the run had, so a restart can say why: released (queued) or lost (running).
 const claimSQL = `
+WITH pick AS (
+  SELECT id, status AS was FROM runs
+   WHERE status = 'queued'
+      OR (status = 'running' AND lease_until < now())
+   ORDER BY created_at, id
+   FOR UPDATE SKIP LOCKED
+   LIMIT 1)
 UPDATE runs
    SET status = 'running',
        lease_owner = $1,
        lease_until = now() + make_interval(secs => $2),
        claims = claims + 1
- WHERE id = (
-   SELECT id FROM runs
-    WHERE status = 'queued'
-       OR (status = 'running' AND lease_until < now())
-    ORDER BY created_at, id
-    FOR UPDATE SKIP LOCKED
-    LIMIT 1)
-RETURNING id, branch_id, spec, claims, lease_until`
+  FROM pick
+ WHERE runs.id = pick.id
+RETURNING runs.id, runs.branch_id, runs.spec, runs.claims, runs.lease_until, pick.was`
 
 // Claim returns the next run for owner, or nil if there is nothing to do.
 func Claim(ctx context.Context, q db.DBTX, owner string, lease time.Duration) (*Claimed, error) {
 	var c Claimed
-	err := q.QueryRow(ctx, claimSQL, owner, lease.Seconds()).Scan(&c.ID, &c.BranchID, &c.Spec, &c.Claims, &c.LeaseUntil)
+	err := q.QueryRow(ctx, claimSQL, owner, lease.Seconds()).Scan(&c.ID, &c.BranchID, &c.Spec, &c.Claims, &c.LeaseUntil, &c.Was)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}

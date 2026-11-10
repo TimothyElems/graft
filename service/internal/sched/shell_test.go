@@ -1,94 +1,182 @@
 package sched
 
 import (
-	"reflect"
+	"context"
+	"fmt"
+	"sync"
 	"testing"
+	"time"
 
 	"graft/kernel/pipeline"
+	"graft/service/internal/runner"
 	"graft/service/internal/store"
 )
 
-func TestFakeRunnerParsesScript(t *testing.T) {
-	got, err := FakeRunner{}.Script(store.StepSpec{ID: "m", Command: []string{"graft-fake", "fail:10", "ok:5"}})
+// realTolerance is how far a real-clock event may be from the kernel's virtual time.
+const realTolerance = 30 // ms
+
+type key struct {
+	Type, Step, Reason string
+	Attempt            int
+}
+
+func keys(evs []pipeline.Event) []key {
+	out := make([]key, len(evs))
+	for i, e := range evs {
+		out[i] = key{e.Type, e.Step, e.Reason, e.Attempt}
+	}
+	return out
+}
+
+// runBoth runs spec through the real-clock shell (Script runner, real sleeps) and the
+// kernel's Simulate, and requires the same events in the same order, at about the
+// same times, and the same step results.
+func runBoth(t *testing.T, spec store.RunSpec, cancelAt time.Duration) {
+	t.Helper()
+	var want pipeline.Result
+	var err error
+	if cancelAt > 0 {
+		c := pipeline.Case{Steps: steps(spec), Concurrency: spec.Concurrency, Script: map[string][]pipeline.Attempt{}}
+		for _, s := range spec.Steps {
+			outs, _, _ := runner.ParseFake(s.Command)
+			for _, o := range outs {
+				k := map[bool]string{true: "ok", false: "fail"}[o.OK]
+				c.Script[s.ID] = append(c.Script[s.ID], pipeline.Attempt{Outcome: k, DurMs: o.Dur.Milliseconds()})
+			}
+		}
+		at := cancelAt.Milliseconds()
+		c.CancelAtMs = &at
+		want, err = pipeline.Simulate(c)
+	} else {
+		want, err = Simulate(spec)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []pipeline.Attempt{{Outcome: "fail", DurMs: 10}, {Outcome: "ok", DurMs: 5}}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("got %v want %v", got, want)
-	}
-}
 
-func TestFakeRunnerTreatsOtherCommandsAsDefault(t *testing.T) {
-	for _, cmd := range [][]string{nil, {"psql", "-f", "migrate.sql"}} {
-		got, err := FakeRunner{}.Script(store.StepSpec{ID: "m", Command: cmd})
-		if err != nil || got != nil {
-			t.Fatalf("%v: got %v, %v; want nil script (kernel default)", cmd, got, err)
+	var live []pipeline.Event
+	cancel := make(chan struct{})
+	if cancelAt > 0 {
+		go func() { time.Sleep(cancelAt); close(cancel) }()
+	}
+	got, emitted, err := Clock{Runner: runner.Script{}}.Run(context.Background(), "run_eq", spec, cancel,
+		func(evs []pipeline.Event) error { live = append(live, evs...); return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if emitted != len(live) || len(got.Events) != len(live)+1 {
+		t.Fatalf("emitted %d events live, result has %d (want live + run_finished)", len(live), len(got.Events))
+	}
+
+	if fmt.Sprint(keys(got.Events)) != fmt.Sprint(keys(want.Events)) {
+		t.Fatalf("event sequence differs from the kernel\n real:   %v\n kernel: %v", keys(got.Events), keys(want.Events))
+	}
+	var worst int64
+	for i := range want.Events {
+		d := got.Events[i].AtMs - want.Events[i].AtMs
+		if d < 0 {
+			d = -d
+		}
+		worst = max(worst, d)
+		if d > realTolerance {
+			t.Fatalf("event %d (%v) at %d ms, kernel says %d ms", i, keys(want.Events)[i], got.Events[i].AtMs, want.Events[i].AtMs)
 		}
 	}
-}
-
-func TestFakeRunnerRejectsBadOutcomes(t *testing.T) {
-	for _, w := range []string{"maybe:10", "ok", "ok:-1", "ok:ten", "fail:"} {
-		if _, err := (FakeRunner{}).Script(store.StepSpec{ID: "m", Command: []string{"graft-fake", w}}); err == nil {
-			t.Errorf("%q: want error", w)
+	for id, w := range want.Steps {
+		g := got.Steps[id]
+		if g.Status != w.Status || g.Attempts != w.Attempts || g.Reason != w.Reason {
+			t.Fatalf("step %s: real %+v, kernel %+v", id, g, w)
 		}
 	}
-	if _, err := (FakeRunner{}).Script(store.StepSpec{ID: "m", Command: []string{"graft-fake"}}); err == nil {
-		t.Error("graft-fake with no outcomes: want error")
+	if got.RunStatus != want.RunStatus {
+		t.Fatalf("run status %s, kernel %s", got.RunStatus, want.RunStatus)
+	}
+	t.Logf("%d events identical in order; real times within %d ms of the kernel's", len(want.Events), worst)
+}
+
+// No two things happen at the same virtual moment in these cases: in real time there
+// are no exact ties, so tied events could come out in either order.
+func TestRealClockMatchesKernel(t *testing.T) {
+	spec := store.RunSpec{Concurrency: 2, Steps: []store.StepSpec{
+		{ID: "clone", MaxAttempts: 1, Command: []string{"graft-fake", "ok:40"}},
+		{ID: "migrate", Needs: []string{"clone"}, MaxAttempts: 3, TimeoutMs: 60, BackoffMs: 30,
+			Command: []string{"graft-fake", "ok:100", "fail:20", "ok:35"}}, // timeout, fail, ok
+		{ID: "deploy", Needs: []string{"clone"}, MaxAttempts: 1, Command: []string{"graft-fake", "ok:75"}},
+		{ID: "seed", Needs: []string{"migrate"}, MaxAttempts: 1, Command: []string{"graft-fake", "ok:25"}},
+	}}
+	runBoth(t, spec, 0)
+}
+
+func TestRealClockMatchesKernelOnFailureAndSkip(t *testing.T) {
+	spec := store.RunSpec{Concurrency: 1, Steps: []store.StepSpec{
+		{ID: "a", MaxAttempts: 2, BackoffMs: 25, Command: []string{"graft-fake", "fail:20", "fail:30"}},
+		{ID: "b", Needs: []string{"a"}, MaxAttempts: 1},
+		{ID: "c", Needs: []string{"b"}, MaxAttempts: 1},
+		{ID: "d", MaxAttempts: 1, Command: []string{"graft-fake", "ok:15"}},
+	}}
+	runBoth(t, spec, 0)
+}
+
+func TestRealClockMatchesKernelOnCancel(t *testing.T) {
+	spec := store.RunSpec{Concurrency: 2, Steps: []store.StepSpec{
+		{ID: "a", MaxAttempts: 1, Command: []string{"graft-fake", "ok:40"}},
+		{ID: "b", MaxAttempts: 1, Command: []string{"graft-fake", "ok:500"}},
+		{ID: "c", Needs: []string{"a"}, MaxAttempts: 1, Command: []string{"graft-fake", "ok:500"}},
+	}}
+	runBoth(t, spec, 120*time.Millisecond) // a done at 40; b and c running at 120 are cancelled
+}
+
+func TestInterruptStopsEveryAttemptBeforeReturning(t *testing.T) {
+	spec := store.RunSpec{Concurrency: 2, Steps: []store.StepSpec{
+		{ID: "a", MaxAttempts: 1, Command: []string{"graft-fake", "ok:5000"}},
+		{ID: "b", MaxAttempts: 1, Command: []string{"graft-fake", "ok:5000"}},
+	}}
+	tr := &tracking{inner: runner.Script{}}
+	ctx, stop := context.WithCancel(context.Background())
+	go func() { time.Sleep(50 * time.Millisecond); stop() }()
+	start := time.Now()
+	_, _, err := Clock{Runner: tr}.Run(ctx, "run_int", spec, nil, nil)
+	if err != ErrInterrupted || time.Since(start) > time.Second {
+		t.Fatalf("got %v after %s", err, time.Since(start))
+	}
+	if tr.running() != 0 {
+		t.Fatalf("%d attempts still running after Run returned", tr.running())
 	}
 }
 
-// The shell must pass every field through to the kernel. The expected value is
-// built by hand from the kernel's own types, NOT through Shell.Case, so a
-// mapping bug in the shell cannot hide by appearing on both sides.
-func TestExecuteEqualsKernelOnHandBuiltCase(t *testing.T) {
-	run := store.RunSpec{
-		Concurrency: 2,
-		Steps: []store.StepSpec{
-			{ID: "clone", MaxAttempts: 1, Command: []string{"graft-fake", "ok:800"}},
-			{ID: "migrate", Needs: []string{"clone"}, MaxAttempts: 3, TimeoutMs: 30, BackoffMs: 7,
-				Command: []string{"graft-fake", "ok:50", "fail:10", "ok:20"}},
-			{ID: "deploy", Needs: []string{"clone"}, MaxAttempts: 1, Command: []string{"graft-fake", "ok:100"}},
-			{ID: "seed", Needs: []string{"migrate"}, MaxAttempts: 1},
-		},
+func TestValidateRefusesBadPipelinesAndScripts(t *testing.T) {
+	for _, s := range []store.RunSpec{
+		{Steps: []store.StepSpec{{ID: "a", Needs: []string{"b"}}, {ID: "b", Needs: []string{"a"}}}},
+		{Steps: []store.StepSpec{{ID: "a", Command: []string{"graft-fake", "maybe:1"}}}},
+	} {
+		if err := Validate(s); err == nil {
+			t.Errorf("%v: want an error", s)
+		}
 	}
-	want, err := pipeline.Simulate(pipeline.Case{
-		Concurrency: 2,
-		Steps: []pipeline.Step{
-			{ID: "clone", MaxAttempts: 1},
-			{ID: "migrate", Needs: []string{"clone"}, MaxAttempts: 3, TimeoutMs: 30, BackoffMs: 7},
-			{ID: "deploy", Needs: []string{"clone"}, MaxAttempts: 1},
-			{ID: "seed", Needs: []string{"migrate"}, MaxAttempts: 1},
-		},
-		Script: map[string][]pipeline.Attempt{
-			"clone":   {{Outcome: "ok", DurMs: 800}},
-			"migrate": {{Outcome: "ok", DurMs: 50}, {Outcome: "fail", DurMs: 10}, {Outcome: "ok", DurMs: 20}},
-			"deploy":  {{Outcome: "ok", DurMs: 100}},
-		},
-	})
-	if err != nil {
+	if err := Validate(store.RunSpec{Steps: []store.StepSpec{{ID: "a", Command: []string{"psql"}}}}); err != nil {
 		t.Fatal(err)
-	}
-	got, err := Shell{Runner: FakeRunner{}}.Execute(run)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("shell result differs from kernel\n got: %+v\nwant: %+v", got, want)
-	}
-	// Sanity: this case really exercises timeout, retry and backoff, or the test proves little.
-	m := got.Steps["migrate"]
-	if m.Attempts != 3 || *m.FinishedMs != 800+30+7+10+7+20 {
-		t.Fatalf("migrate did not take the timeout+retry path: %+v (finished %d)", m, *m.FinishedMs)
 	}
 }
 
-func TestCaseRefusesBadPipelineWithKernelError(t *testing.T) {
-	_, err := Shell{Runner: FakeRunner{}}.Case([]store.StepSpec{
-		{ID: "a", Needs: []string{"b"}, MaxAttempts: 1}, {ID: "b", Needs: []string{"a"}, MaxAttempts: 1},
-	}, 1)
-	if err == nil || err.Error() != "cycle" {
-		t.Fatalf("got %v, want the kernel's 'cycle'", err)
-	}
+// tracking counts attempts currently inside the runner.
+type tracking struct {
+	inner runner.Runner
+	mu    sync.Mutex
+	n     int
 }
+
+func (r *tracking) running() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.n
+}
+
+func (r *tracking) Run(ctx context.Context, a runner.Attempt) (runner.Result, error) {
+	r.mu.Lock()
+	r.n++
+	r.mu.Unlock()
+	defer func() { r.mu.Lock(); r.n--; r.mu.Unlock() }()
+	return r.inner.Run(ctx, a)
+}
+
+func (r *tracking) Cleanup(context.Context, string) error { return nil }

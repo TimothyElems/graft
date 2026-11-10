@@ -154,46 +154,26 @@ func attemptFor(c Case, id string, n int) Attempt {
 
 func ptr(v int64) *int64 { return &v }
 
-// Simulate runs the case in virtual time.
+// ApplyTimeout is rule 2: an attempt longer than timeout_ms ends AT the timeout, with
+// outcome "timeout". Real runners enforce the same rule with a deadline.
+func ApplyTimeout(s Step, dur int64, outcome string) (int64, string) {
+	if s.TimeoutMs > 0 && dur > s.TimeoutMs {
+		return s.TimeoutMs, "timeout"
+	}
+	return dur, outcome
+}
+
+// Simulate runs the case in virtual time: it is the Machine driven by a virtual clock
+// and scripted outcomes. The real-clock shell (service/internal/sched) drives the SAME
+// Machine with real time and real attempts, so the rules exist once.
 func Simulate(c Case) (Result, error) {
-	if err := Validate(c.Steps); err != nil {
+	m, err := NewMachine(c.Steps, c.Concurrency)
+	if err != nil {
 		return Result{}, err
 	}
-	steps := c.Steps
-	n := len(steps)
-	conc := c.Concurrency
-	if conc < 1 {
-		conc = 1
-	}
-	idx := map[string]int{}
-	for i, s := range steps {
-		idx[s.ID] = i
-	}
-	st := make([]state, n)
-	for i := range st {
-		st[i].status = Pending
-	}
 	var run []running
-	var events []Event
 	seq := 0
 	t := int64(0)
-	cancelled := false
-
-	emit := func(typ string, i int, attempt int, reason string) {
-		id := ""
-		if i >= 0 {
-			id = steps[i].ID
-		}
-		events = append(events, Event{AtMs: t, Type: typ, Step: id, Attempt: attempt, Reason: reason})
-	}
-	maxAttempts := func(i int) int {
-		if steps[i].MaxAttempts < 1 {
-			return 1
-		}
-		return steps[i].MaxAttempts
-	}
-	bad := func(s string) bool { return s == Failed || s == Skipped || s == Cancelled }
-
 	for {
 		// 1. Finish attempts that end now, oldest start first.
 		sort.SliceStable(run, func(a, b int) bool {
@@ -208,119 +188,34 @@ func Simulate(c Case) (Result, error) {
 				still = append(still, r)
 				continue
 			}
-			s := &st[r.i]
-			s.runningNow = false
-			if r.outcome == "ok" {
-				s.status = Succeeded
-				s.finished = ptr(t)
-				emit("step_succeeded", r.i, s.attempts, "")
-				continue
-			}
-			reason := "failed"
-			if r.outcome == "timeout" {
-				reason = "timeout"
-			}
-			if s.attempts >= maxAttempts(r.i) {
-				s.status = Failed
-				s.finished = ptr(t)
-				s.reason = reason
-				emit("step_failed", r.i, s.attempts, reason)
-			} else {
-				s.readyAt = t + steps[r.i].BackoffMs
-				emit("step_retry", r.i, s.attempts, reason)
-			}
+			m.Finish(t, r.i, r.outcome)
 		}
 		run = still
 
-		// 2. Skip steps behind a failure, until nothing changes.
-		for changed := true; changed; {
-			changed = false
-			for i := range steps {
-				if st[i].status != Pending || st[i].attempts > 0 {
-					continue
-				}
-				for _, need := range steps[i].Needs {
-					if bad(st[idx[need]].status) {
-						st[i].status = Skipped
-						st[i].finished = ptr(t)
-						st[i].reason = "dependency:" + need
-						emit("step_skipped", i, 0, st[i].reason)
-						changed = true
-						break
-					}
-				}
-			}
+		// 2-4. Skip, cancel, start.
+		cancel := c.CancelAtMs != nil && *c.CancelAtMs <= t
+		for _, s := range m.Settle(t, cancel) {
+			a := attemptFor(c, s.ID, s.Attempt)
+			dur, outcome := ApplyTimeout(c.Steps[s.Step], a.DurMs, a.Outcome)
+			seq++
+			run = append(run, running{i: s.Step, end: t + dur, outcome: outcome, seq: seq})
 		}
-
-		// 3. Cancel.
-		if c.CancelAtMs != nil && *c.CancelAtMs <= t {
-			for i := range steps {
-				s := &st[i]
-				if s.status == Pending {
-					s.status = Cancelled
-					s.finished = ptr(t)
-					s.reason = "cancelled"
-					s.runningNow = false
-					emit("step_cancelled", i, s.attempts, "cancelled")
-					cancelled = true
-				}
-			}
-			run = nil
+		if cancel {
 			break
 		}
 
-		// 4. Start ready steps.
-		for i := range steps {
-			if len(run) >= conc {
-				break
-			}
-			s := &st[i]
-			if s.status != Pending || s.runningNow || s.readyAt > t {
-				continue
-			}
-			ok := true
-			for _, need := range steps[i].Needs {
-				if st[idx[need]].status != Succeeded {
-					ok = false
-					break
-				}
-			}
-			if !ok {
-				continue
-			}
-			s.attempts++
-			s.runningNow = true
-			if s.started == nil {
-				s.started = ptr(t)
-			}
-			a := attemptFor(c, steps[i].ID, s.attempts)
-			dur, outcome := a.DurMs, a.Outcome
-			if steps[i].TimeoutMs > 0 && dur > steps[i].TimeoutMs {
-				dur, outcome = steps[i].TimeoutMs, "timeout"
-			}
-			seq++
-			run = append(run, running{i: i, end: t + dur, outcome: outcome, seq: seq})
-			emit("step_started", i, s.attempts, "")
-		}
-
 		// 5. Move time forward.
+		if !m.Active() {
+			break
+		}
 		next := int64(-1)
 		consider := func(v int64) {
 			if next < 0 || v < next {
 				next = v
 			}
 		}
-		active := len(run) > 0
-		for i := range steps {
-			if st[i].status == Pending {
-				active = true
-				if !st[i].runningNow && st[i].attempts > 0 && st[i].readyAt > t {
-					consider(st[i].readyAt)
-				}
-			}
-		}
-		if !active {
-			break
+		if r, ok := m.NextReady(t); ok {
+			consider(r)
 		}
 		for _, r := range run {
 			consider(r.end)
@@ -333,25 +228,5 @@ func Simulate(c Case) (Result, error) {
 		}
 		t = next
 	}
-
-	res := Result{Steps: map[string]StepResult{}, FinishedMs: t}
-	allOK := true
-	for i, s := range steps {
-		sr := st[i]
-		if sr.status != Succeeded {
-			allOK = false
-		}
-		res.Steps[s.ID] = StepResult{Status: sr.status, Attempts: sr.attempts, StartedMs: sr.started, FinishedMs: sr.finished, Reason: sr.reason}
-	}
-	switch {
-	case cancelled:
-		res.RunStatus = "cancelled"
-	case allOK:
-		res.RunStatus = "succeeded"
-	default:
-		res.RunStatus = "failed"
-	}
-	emit("run_finished", -1, 0, res.RunStatus)
-	res.Events = events
-	return res, nil
+	return m.Result(t), nil
 }
