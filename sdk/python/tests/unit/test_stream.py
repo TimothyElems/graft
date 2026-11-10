@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import Any, cast
 from urllib.parse import parse_qs, urlparse
 
 import pytest
@@ -76,7 +76,11 @@ class FakeServer:
 
 def run(server: FakeServer, consume: Callable[[AsyncGraft], Awaitable[Any]], slept: list[float] | None = None) -> Any:
     async def main() -> Any:
-        async with serve(server.handler, "127.0.0.1", 0, process_request=server.check) as srv:
+        # Explicit Any, test-only: websockets' Server class is only partly typed for pyright on
+        # Python < 3.13 (reproduced on 3.12 with websockets 17.4). The SDK itself only uses
+        # websockets' client, which type-checks strictly on every supported version.
+        srv = cast(Any, await serve(server.handler, "127.0.0.1", 0, process_request=server.check))
+        try:
             port: int = next(iter(srv.sockets)).getsockname()[1]
 
             async def no_sleep(s: float) -> None:
@@ -86,6 +90,9 @@ def run(server: FakeServer, consume: Callable[[AsyncGraft], Awaitable[Any]], sle
             policy = RetryPolicy(base=0.01, async_sleep=no_sleep)
             async with AsyncGraft(token="t0ken", base_url=f"http://127.0.0.1:{port}", retry=policy) as g:
                 return await consume(g)
+        finally:
+            srv.close()
+            await srv.wait_closed()
     return asyncio.run(main())
 
 
