@@ -75,9 +75,9 @@ func (s Shell) Case(steps []store.StepSpec, concurrency int) (pipeline.Case, err
 	return c, nil
 }
 
-// Execute runs the kernel for one run. The result is the kernel's, unchanged.
-func (s Shell) Execute(r store.Run) (pipeline.Result, error) {
-	c, err := s.Case(r.Steps, r.Concurrency)
+// Execute runs the kernel for one run's spec. The result is the kernel's, unchanged.
+func (s Shell) Execute(spec store.RunSpec) (pipeline.Result, error) {
+	c, err := s.Case(spec.Steps, spec.Concurrency)
 	if err != nil {
 		return pipeline.Result{}, err
 	}

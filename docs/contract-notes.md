@@ -35,3 +35,10 @@ One sentence per endpoint in `contract/openapi.yaml`, then the gaps I found read
 6. **`cancelRun` on a finished run.** "Safe to repeat" is stated, but not what happens when the run already succeeded: 202 with the unchanged run, or 409? Pick one and write it down.
 7. **`Branch.status` has no `expired`.** TTL expiry presumably goes through `deleting` → `deleted`; worth saying so.
 8. **`concurrency` lives on `CreateRun`, not on the step.** That matches the kernel (one `workers` number per run), but it is a run-level limit only; there is no global cap in the contract.
+
+## Status of the gaps (v0.3)
+
+- 2, 3: **fixed.** `listRunEvents` lists 404 and 422; `listBranches` lists 422 (bad cursor or limit). `getRunBundle` is not built yet; its 404 comes with it.
+- 5: **fixed in v0.2.** Every problem has its own `type`: `validation`, `invalid-pipeline`, `idempotency-key-reused`, `bad-cursor`, ... The SDK branches on `type`.
+- `createRun` also lists 409 now (`idempotency-key-in-use`, a defensive answer that the per-key lock should make unreachable).
+- 1, 4, 6, 7 are still open.

@@ -61,6 +61,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/BranchPage" }
+        "422": { $ref: "#/components/responses/Problem" }
   /v1/branches/{id}:
     parameters:
       - $ref: "#/components/parameters/BranchId"
@@ -100,6 +101,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Run" }
         "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
         "422": { $ref: "#/components/responses/Problem" }
   /v1/runs/{id}:
     parameters:
@@ -145,6 +147,8 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/EventPage" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
   /v1/runs/{id}/bundle:
     parameters:
       - $ref: "#/components/parameters/RunId"
@@ -197,7 +201,11 @@ components:
     IdempotencyKey:
       name: Idempotency-Key
       in: header
-      description: Same key and same body returns the first response. Same key and different body returns 422.
+      description: |
+        Same key and same request (method, path and JSON body; whitespace and key order do not matter)
+        returns the first successful response, with header Idempotent-Replayed: true. Same key and a
+        different request returns 422 with type .../idempotency-key-reused. Only 2xx responses are kept,
+        for 24 hours, so a request that failed can be retried with the same key.
       schema: { type: string, maxLength: 64 }
   responses:
     Problem:

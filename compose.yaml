@@ -1,12 +1,28 @@
 # Local stack: `docker compose up --wait`, then run the SDK's e2e tests against it.
 services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: graft
+      POSTGRES_PASSWORD: graft    # local only
+      POSTGRES_DB: graft
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "graft"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
   graftd:
     build:
       context: .
       dockerfile: service/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
     environment:
-      # Local default only. Never use this value anywhere reachable.
+      # Local defaults only. Never use these values anywhere reachable.
       GRAFT_TOKEN: ${GRAFT_TOKEN:-local-dev-token-change-me}
+      GRAFT_DATABASE_URL: postgres://graft:graft@postgres:5432/graft?sslmode=disable
       GRAFT_WORKERS: "2"
     ports:
       - "8080:8080"

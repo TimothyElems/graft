@@ -1,8 +1,9 @@
 // graftd serves the Graft API.
 //
-//	GRAFT_TOKEN   required: the bearer token clients must send
-//	GRAFT_ADDR    listen address, default :8080
-//	GRAFT_WORKERS number of run workers, default 2
+//	GRAFT_TOKEN        required: the bearer token clients must send
+//	GRAFT_DATABASE_URL required: postgres://... (migrations run at start)
+//	GRAFT_ADDR         listen address, default :8080
+//	GRAFT_WORKERS      number of run workers, default 2
 //
 // `graftd -healthcheck` GETs /healthz and exits 0 or 1, for container health
 // checks in an image that has no curl.
@@ -22,11 +23,12 @@ import (
 	"time"
 
 	"graft/service/internal/api"
+	"graft/service/internal/db"
+	"graft/service/internal/queue"
 	"graft/service/internal/sched"
-	"graft/service/internal/store"
 )
 
-var version = "v0.2.0-dev"
+var version = "v0.3.0-dev"
 
 func main() {
 	health := flag.Bool("healthcheck", false, "GET /healthz on this machine and exit")
@@ -51,10 +53,31 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	srv := api.New(ctx, api.Server{
-		Store: store.NewMemory(), Shell: sched.Shell{Runner: sched.FakeRunner{}},
-		Token: token, Version: version, Log: log,
-	}, workers)
+	dbURL := os.Getenv("GRAFT_DATABASE_URL")
+	if dbURL == "" {
+		log.Error("GRAFT_DATABASE_URL must be set")
+		os.Exit(2)
+	}
+	pool, err := db.Open(ctx, dbURL)
+	if err != nil {
+		log.Error("database", "err", err)
+		os.Exit(1)
+	}
+	defer pool.Close()
+	applied, err := db.Migrate(ctx, pool)
+	if err != nil {
+		log.Error("migrate", "err", err)
+		os.Exit(1)
+	}
+	log.Info("migrations", "applied", applied)
+
+	shell := sched.Shell{Runner: sched.FakeRunner{}}
+	host, _ := os.Hostname()
+	for i := 0; i < workers; i++ {
+		w := &queue.Worker{Pool: pool, Shell: shell, Owner: fmt.Sprintf("%s-%d-w%d", host, os.Getpid(), i), Log: log}
+		go w.Run(ctx)
+	}
+	srv := api.New(api.Server{Pool: pool, Shell: shell, Token: token, Version: version, Log: log})
 
 	hs := &http.Server{Addr: addr, Handler: srv.Handler(), ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second}

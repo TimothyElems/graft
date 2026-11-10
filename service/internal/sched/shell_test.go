@@ -43,7 +43,7 @@ func TestFakeRunnerRejectsBadOutcomes(t *testing.T) {
 // built by hand from the kernel's own types, NOT through Shell.Case, so a
 // mapping bug in the shell cannot hide by appearing on both sides.
 func TestExecuteEqualsKernelOnHandBuiltCase(t *testing.T) {
-	run := store.Run{
+	run := store.RunSpec{
 		Concurrency: 2,
 		Steps: []store.StepSpec{
 			{ID: "clone", MaxAttempts: 1, Command: []string{"graft-fake", "ok:800"}},

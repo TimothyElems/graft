@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -10,19 +11,44 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"graft/service/internal/pgtest"
+	"graft/service/internal/queue"
 	"graft/service/internal/sched"
 	"graft/service/internal/store"
 )
 
 const token = "test-token-0123456789"
 
-func newTest(t *testing.T) *httptest.Server {
+// newTestWith starts graftd's handler on a fresh migrated database, with one real
+// queue.Worker draining runs, and lets the caller adjust the server (e.g. its clock).
+func newTestWith(t *testing.T, adjust func(*Server)) (*httptest.Server, *pgxpool.Pool) {
 	t.Helper()
+	pool := pgtest.New(t)
 	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	s := New(ctx, Server{Store: store.NewMemory(), Shell: sched.Shell{Runner: sched.FakeRunner{}}, Token: token}, 2)
+	shell := sched.Shell{Runner: sched.FakeRunner{}}
+	w := &queue.Worker{Pool: pool, Shell: shell, Owner: "test-worker", Idle: 5 * time.Millisecond}
+	done := make(chan struct{})
+	go func() { w.Run(ctx); close(done) }()
+	t.Cleanup(func() { cancel(); <-done }) // stop the worker before the database is dropped
+	s := New(Server{Pool: pool, Shell: shell, Token: token,
+		Log: slog.New(slog.NewTextHandler(testLog{t}, &slog.HandlerOptions{Level: slog.LevelError}))})
+	if adjust != nil {
+		adjust(s)
+	}
 	ts := httptest.NewServer(s.Handler())
 	t.Cleanup(ts.Close)
+	return ts, pool
+}
+
+// testLog sends the server's error logs to the test output, so a 500 explains itself.
+type testLog struct{ t *testing.T }
+
+func (l testLog) Write(p []byte) (int, error) { l.t.Helper(); l.t.Log(string(p)); return len(p), nil }
+
+func newTest(t *testing.T) *httptest.Server {
+	ts, _ := newTestWith(t, nil)
 	return ts
 }
 

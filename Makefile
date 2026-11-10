@@ -1,4 +1,4 @@
-.PHONY: test test-go test-py diff contract all test-service test-sdk e2e e2e-compose
+.PHONY: test test-go test-py diff contract all test-service test-sdk e2e e2e-compose fmt-check pg-dev
 export PATH := $(PATH):/usr/local/go/bin
 
 all: contract test diff test-service
@@ -9,7 +9,7 @@ contract:
 	python3 -c "import pglast; pglast.parse_sql(open('db/schema.sql').read())"
 
 test-go:
-	cd kernel && go vet ./... && go test ./...
+	cd kernel && go vet ./... && go test -race ./...
 
 test-py:
 	python3 -m pytest parity -q
@@ -22,8 +22,12 @@ diff:
 fmt-check:        ## same gate as CI: fail if any Go file needs gofmt
 	@out=$$(gofmt -l service kernel); if [ -n "$$out" ]; then echo "gofmt needed:"; echo "$$out"; exit 1; fi
 
-test-service: fmt-check
+test-service: fmt-check   ## needs GRAFT_TEST_DATABASE_URL (see `make pg-dev`)
+	@if [ -z "$$GRAFT_TEST_DATABASE_URL" ]; then echo "GRAFT_TEST_DATABASE_URL is not set. Start one with: make pg-dev"; exit 1; fi
 	cd service && go vet ./... && go test -race -count=1 ./...
+
+pg-dev:           ## start a throwaway local Postgres and print the env var to export
+	@./scripts/pg-dev.sh start
 
 test-sdk:
 	cd sdk/python && .venv/bin/python -m pytest tests/unit -q
