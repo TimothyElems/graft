@@ -13,6 +13,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"graft/service/internal/obs"
 	"graft/service/internal/pgtest"
 	"graft/service/internal/queue"
 	"graft/service/internal/runner"
@@ -30,7 +31,12 @@ func newTestWith(t *testing.T, adjust func(*Server)) (*httptest.Server, *pgxpool
 	pool := pgtest.New(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	clock := sched.Clock{Runner: runner.Script{}}
-	w := &queue.Worker{Pool: pool, Clock: clock, Owner: "test-worker", Idle: 5 * time.Millisecond}
+	o, err := obs.New(ctx, func(c context.Context) (int, error) { return store.QueueDepth(c, pool) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := &queue.Worker{Pool: pool, Clock: clock, Owner: "test-worker", Idle: 5 * time.Millisecond, Tracer: o.Tracer,
+		Hooks: queue.Hooks{Claimed: o.Claimed, Events: o.Events, Finished: o.Finished}}
 	done := make(chan struct{})
 	go func() { w.Run(ctx); close(done) }()
 	t.Cleanup(func() { cancel(); <-done }) // stop the worker before the database is dropped
@@ -38,7 +44,7 @@ func newTestWith(t *testing.T, adjust func(*Server)) (*httptest.Server, *pgxpool
 	hubDone := make(chan struct{})
 	go func() { hub.Run(ctx); close(hubDone) }()
 	t.Cleanup(func() { cancel(); <-hubDone })
-	s := New(Server{Pool: pool, Token: token, Hub: hub,
+	s := New(Server{Pool: pool, Token: token, Hub: hub, Obs: o,
 		Log: slog.New(slog.NewTextHandler(testLog{t}, &slog.HandlerOptions{Level: slog.LevelError}))})
 	if adjust != nil {
 		adjust(s)

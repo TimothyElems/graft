@@ -21,7 +21,11 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/trace"
 
+	"graft/service/internal/obs"
 	"graft/service/internal/store"
 	"graft/service/internal/stream"
 )
@@ -35,6 +39,7 @@ type Server struct {
 	Now     func() time.Time
 	Log     *slog.Logger
 	Hub     *stream.Hub
+	Obs     *obs.Obs
 
 	idemBeforeStore func() // tests only: runs after a keyed handler, before its key is stored
 }
@@ -45,6 +50,13 @@ func New(s Server) *Server {
 	}
 	if s.Log == nil {
 		s.Log = slog.New(slog.NewJSONHandler(io.Discard, nil))
+	}
+	if s.Obs == nil { // tests: a real tracer (so request ids exist) and a private registry
+		o, err := obs.New(context.Background(), func(ctx context.Context) (int, error) { return store.QueueDepth(ctx, s.Pool) })
+		if err != nil {
+			panic(err)
+		}
+		s.Obs = o
 	}
 	return &s
 }
@@ -74,14 +86,29 @@ func newID(prefix string) string {
 	return prefix + strings.ToLower(base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(b))
 }
 
+// requestID starts (or continues, from an incoming traceparent) a trace for the
+// request. Its trace id is the request_id: in the X-Request-Id header, in every
+// problem body, and as trace_id on every log line, so all three lead to one place.
 func (s *Server) requestID(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		id := newID("req_")
+		ctx := s.Obs.Propagator.Extract(r.Context(), propagation.HeaderCarrier(r.Header))
+		ctx, span := s.Obs.Tracer.Start(ctx, r.Method, trace.WithSpanKind(trace.SpanKindServer))
+		defer span.End()
+		id := obs.RequestID(span.SpanContext())
 		w.Header().Set("X-Request-Id", id)
+		s.Obs.Propagator.Inject(ctx, propagation.HeaderCarrier(w.Header())) // traceparent on the response
 		start := time.Now()
 		rec := &statusRecorder{ResponseWriter: w, status: 200}
-		next.ServeHTTP(rec, r.WithContext(context.WithValue(r.Context(), ctxKey{}, id)))
-		s.Log.Info("request", "request_id", id, "method", r.Method, "path", r.URL.Path,
+		r2 := r.WithContext(context.WithValue(ctx, ctxKey{}, id))
+		next.ServeHTTP(rec, r2)
+		route := r2.Pattern // set by ServeMux once it has matched
+		if route == "" {
+			route = "unmatched"
+		}
+		span.SetName(route)
+		span.SetAttributes(attribute.Int("http.status_code", rec.status))
+		s.Obs.HTTP(route, rec.status, time.Since(start))
+		s.Log.InfoContext(ctx, "request", "request_id", id, "method", r.Method, "route", route, "path", r.URL.Path,
 			"status", rec.status, "ms", time.Since(start).Milliseconds())
 	})
 }

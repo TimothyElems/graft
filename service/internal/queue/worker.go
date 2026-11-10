@@ -12,6 +12,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 
 	"graft/kernel/pipeline"
 	"graft/service/internal/events"
@@ -34,12 +36,14 @@ type Worker struct {
 	CancelPoll time.Duration // how often a running run checks for a cancel request; default 1s
 	Idle       time.Duration // sleep when the queue is empty; default 200ms
 	Log        *slog.Logger
-	Hooks      Hooks // optional, for metrics
+	Hooks      Hooks        // optional, for metrics
+	Tracer     trace.Tracer // optional: a span per run
 }
 
 // Hooks lets observability watch the worker without the worker knowing about it.
 type Hooks struct {
-	Claimed  func(claims int)                     // a run was claimed (claims > 1: reclaimed after a lost lease)
+	Claimed  func(claims int, was string)         // a run was claimed; claims > 1 is a restart (was: queued=released, running=lease expired)
+	Events   func([]pipeline.Event)               // events were recorded for a run
 	Finished func(status string, d time.Duration) // a run's result was recorded
 }
 
@@ -98,7 +102,14 @@ func (w *Worker) StepWith(claimCtx, ctx context.Context) (bool, error) {
 		return false, err
 	}
 	if w.Hooks.Claimed != nil {
-		w.Hooks.Claimed(c.Claims)
+		w.Hooks.Claimed(c.Claims, c.Was)
+	}
+	if w.Tracer != nil {
+		var span trace.Span
+		ctx, span = w.Tracer.Start(ctx, "run", trace.WithAttributes(attribute.String("run_id", c.ID),
+			attribute.String("branch_id", c.BranchID), attribute.Int("claims", c.Claims)))
+		defer span.End()
+		w.Log.InfoContext(ctx, "run claimed", "run_id", c.ID, "branch_id", c.BranchID, "claims", c.Claims)
 	}
 	began := time.Now()
 	// Background-based context for writes that must still happen while shutting down.
@@ -159,18 +170,25 @@ func (w *Worker) StepWith(claimCtx, ctx context.Context) (bool, error) {
 
 // append writes events as they happen, fenced: only while this worker holds the lease.
 func (w *Worker) append(ctx context.Context, c *Claimed, kevs []pipeline.Event) error {
-	return pgx.BeginFunc(ctx, w.Pool, func(tx pgx.Tx) error {
+	err := pgx.BeginFunc(ctx, w.Pool, func(tx pgx.Tx) error {
 		_, err := events.AppendFenced(ctx, tx, c.ID, c.BranchID, w.Owner, events.FromKernel(kevs))
 		if errors.Is(err, events.ErrNotOwner) {
 			return ErrLeaseLost
 		}
 		return err
 	})
+	if err == nil && w.Hooks.Events != nil {
+		w.Hooks.Events(kevs)
+	}
+	return err
 }
 
 func (w *Worker) finish(ctx context.Context, c *Claimed, spec store.RunSpec, res *pipeline.Result, rest []pipeline.Event,
 	runErr error, began time.Time) error {
 	err := Finish(ctx, w.Pool, c.ID, c.BranchID, w.Owner, spec, res, rest, runErr)
+	if err == nil && w.Hooks.Events != nil {
+		w.Hooks.Events(rest)
+	}
 	if errors.Is(err, ErrLeaseLost) {
 		w.Log.Warn("lease lost before commit; result dropped", "run_id", c.ID, "owner", w.Owner)
 	}

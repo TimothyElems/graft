@@ -41,4 +41,5 @@ One sentence per endpoint in `contract/openapi.yaml`, then the gaps I found read
 - 2, 3: **fixed.** `listRunEvents` lists 404 and 422; `listBranches` lists 422 (bad cursor or limit). `getRunBundle` is not built yet; its 404 comes with it.
 - 5: **fixed in v0.2.** Every problem has its own `type`: `validation`, `invalid-pipeline`, `idempotency-key-reused`, `bad-cursor`, ... The SDK branches on `type`.
 - `createRun` also lists 409 now (`idempotency-key-in-use`, a defensive answer that the per-key lock should make unreachable).
-- 1, 4, 6, 7 are still open.
+- 6: **decided in v0.6.** `cancelRun` on a finished run returns 202 with the run unchanged; on a queued run it cancels at time 0 when a worker picks it up; repeating it is harmless.
+- 1, 4, 7 are still open.

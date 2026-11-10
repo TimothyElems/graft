@@ -1,0 +1,31 @@
+# graftd settings. Every key is shown with its default.
+# Precedence: these defaults < this file < GRAFT_* environment variables.
+# Secrets are NOT set here: use GRAFT_TOKEN and GRAFT_DATABASE_URL.
+# A bad or unknown value stops graftd at start, with a message naming the key.
+
+[server]
+addr = ":8080"            # the public API
+metrics_addr = ":9090"    # Prometheus /metrics: keep it internal; must differ from addr
+
+[workers]
+count = 2
+lease = "30s"             # a worker owns a run until its lease lapses
+heartbeat = "10s"         # renews the lease; at most half of lease
+cancel_poll = "1s"        # how often a running run checks for a cancel request
+
+[runner]
+kind = "script"           # "script": graft-fake steps only; "docker": real containers
+default_image = "busybox:1.37"
+memory = "256m"           # per attempt; also the swap limit
+cpus = "1"
+pids = 64                 # stops fork bombs
+user = "65534:65534"      # never 0 (root)
+tmp_size = "16m"          # the only writable path, mounted noexec
+
+[stream]
+write_timeout = "10s"     # a reader slower than this per frame is disconnected (4008)
+poll = "2s"               # safety re-read if a NOTIFY is missed
+
+[shutdown]
+grace = "10s"             # runs in progress may finish within this
+deadline = "25s"          # the process exits by this (keep under the orchestrator's kill timeout)
