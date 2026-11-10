@@ -16,10 +16,22 @@ jobs:
 
   service:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: graft
+          POSTGRES_PASSWORD: graft
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U graft" --health-interval 2s
+          --health-timeout 5s --health-retries 20
+    env:
+      GRAFT_TEST_DATABASE_URL: postgres://graft:graft@localhost:5432/postgres?sslmode=disable
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
-        with: { go-version: "1.24", cache-dependency-path: service/go.mod }
+        with: { go-version: "1.24", cache-dependency-path: service/go.sum }
       - run: test -z "$(gofmt -l service kernel)" || (gofmt -l service kernel; exit 1)
       - run: cd service && go vet ./... && go test -race -count=1 ./...
 
