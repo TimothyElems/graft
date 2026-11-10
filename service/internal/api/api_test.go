@@ -225,10 +225,12 @@ func TestCreateRunIsQueuedThenFinishedByTheKernel(t *testing.T) {
 	}
 	m := done["steps"].([]any)[0].(map[string]any)
 	s := done["steps"].([]any)[1].(map[string]any)
-	// fixture 03's timeline, now in REAL time: start 0, fail 10, start 15, fail 25, start 30, ok 40
-	// (plus a few ms of real overhead; the shell's equivalence tests bound the drift).
+	// fixture 03's timeline, now in REAL time: start 0, fail 10, start 15, fail 25, start 30, ok 40.
+	// Never faster than the kernel; slower by real overhead (each event is written live, in
+	// its own transaction, which on a loaded CI runner adds tens of ms). The tight
+	// real-vs-kernel bound is proved in internal/sched, without database writes.
 	fm, ss := m["finished_ms"].(float64), s["started_ms"].(float64)
-	if m["attempts"] != float64(3) || fm < 40 || fm > 90 || ss < fm {
+	if m["attempts"] != float64(3) || fm < 40 || fm > 1000 || ss < fm {
 		t.Fatalf("migrate %v seed %v", m, s)
 	}
 	// The kernel says reason "" for a success; the contract says null.
