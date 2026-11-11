@@ -129,6 +129,12 @@ class AsyncRuns:
         """Fetch a run and its step results."""
         return Run.model_validate(await self._send(_build.get_run(run_id)))
 
+    async def cancel(self, run_id: str) -> Run:
+        """Ask the service to cancel a run; returns it as it is now (202: the cancel is
+        accepted; the run reaches "cancelled" shortly after). Safe to repeat, and on a
+        finished run it changes nothing. Retried on network errors and 5xx."""
+        return Run.model_validate(await self._send(_build.cancel_run(run_id)))
+
     async def bundle(self, run_id: str) -> bytes:
         """The run's support bundle (.tar.gz, secrets removed by the server). See `graft doctor`."""
         return _build.as_bytes(await self._send(_build.run_bundle(run_id)))

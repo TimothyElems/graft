@@ -56,7 +56,8 @@ class RetryPolicy:
 
 def is_safe(req: Request) -> bool:
     """A retry cannot cause a second effect."""
-    return req.method in SAFE_METHODS or (req.method == "POST" and "Idempotency-Key" in req.headers)
+    return (req.method in SAFE_METHODS or req.idempotent
+            or (req.method == "POST" and "Idempotency-Key" in req.headers))
 
 
 def is_retryable(err: GraftError) -> bool:

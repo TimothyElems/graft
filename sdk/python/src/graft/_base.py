@@ -34,6 +34,7 @@ class Request:
     params: Mapping[str, str | int] = field(default_factory=lambda: dict[str, "str | int"]())
     headers: Mapping[str, str] = field(default_factory=lambda: dict[str, str]())
     raw: bool = False  # the body is bytes (e.g. a bundle), not JSON
+    idempotent: bool = False  # the contract says repeating it is safe, so a retry may resend it
 
 
 def resolve_config(token: str | None, base_url: str | None) -> tuple[str, str]:
@@ -94,6 +95,11 @@ def get_run(run_id: str) -> Request:
     return Request("GET", f"/v1/runs/{run_id}")
 
 
+def cancel_run(run_id: str) -> Request:
+    # "Safe to repeat" in the contract: cancelling twice has the effect of cancelling once.
+    return Request("POST", f"/v1/runs/{run_id}/cancel", idempotent=True)
+
+
 def list_events(run_id: str, after: int, limit: int) -> Request:
     return Request("GET", f"/v1/runs/{run_id}/events", params={"after": after, "limit": limit})
 
@@ -119,6 +125,7 @@ class _Builders:
     get_run = staticmethod(get_run)
     list_events = staticmethod(list_events)
     run_bundle = staticmethod(run_bundle)
+    cancel_run = staticmethod(cancel_run)
     as_bytes = staticmethod(as_bytes)
 
 

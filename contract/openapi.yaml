@@ -73,6 +73,11 @@ paths:
     delete:
       operationId: deleteBranch
       summary: Delete a branch and cancel its runs
+      description: |
+        NOT BUILT YET (x-graft-status: planned). graftd answers 405 today. The design:
+        cancel the branch's runs, mark it deleting, then deleted, which frees its name for
+        reuse (the live-name index already allows that). The SDK has no method for it.
+      x-graft-status: planned
       responses:
         "204": { description: Deleted }
         "404": { $ref: "#/components/responses/Problem" }
