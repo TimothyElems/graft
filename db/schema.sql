@@ -80,3 +80,17 @@ CREATE TABLE idempotency_keys (
   PRIMARY KEY (scope, key)
 );
 CREATE INDEX idempotency_keys_created ON idempotency_keys (created_at);
+
+-- What each attempt printed (last 8 KB), per claim. Read by the support bundle (v0.7).
+CREATE TABLE attempt_logs (
+  run_id      text NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+  claim       integer NOT NULL CHECK (claim >= 1),
+  step_id     text NOT NULL,
+  attempt     integer NOT NULL CHECK (attempt >= 1),
+  outcome     text NOT NULL CHECK (outcome IN ('ok','fail','timeout','cancelled')),
+  exit_code   integer NOT NULL,
+  took_ms     bigint NOT NULL,
+  output      text NOT NULL,
+  created_at  timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (run_id, claim, step_id, attempt)
+);

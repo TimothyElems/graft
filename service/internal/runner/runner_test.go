@@ -67,3 +67,25 @@ func (r *recorder) Run(context.Context, Attempt) (Result, error) {
 	return Result{Outcome: OK}, nil
 }
 func (r *recorder) Cleanup(context.Context, string) error { return nil }
+
+// Support bundles show the exit code next to the outcome; they must agree, and use
+// the Docker runner's convention: -1 when the attempt was killed (timeout, cancel).
+func TestScriptExitCodeAgreesWithTheOutcome(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	for _, c := range []struct {
+		ctx  context.Context
+		a    Attempt
+		want int
+	}{
+		{context.Background(), Attempt{N: 1, Command: []string{"graft-fake", "ok:1"}}, 0},
+		{context.Background(), Attempt{N: 1, Command: []string{"graft-fake", "fail:1"}}, 1},
+		{context.Background(), Attempt{N: 1, Command: []string{"graft-fake", "ok:500"}, Timeout: 5 * time.Millisecond}, -1},
+		{ctx, Attempt{N: 1, Command: []string{"graft-fake", "ok:500"}}, -1},
+	} {
+		res, err := Script{}.Run(c.ctx, c.a)
+		if err != nil || res.ExitCode != c.want {
+			t.Errorf("%v: outcome %s exit %d, want exit %d (err %v)", c.a.Command, res.Outcome, res.ExitCode, c.want, err)
+		}
+	}
+}

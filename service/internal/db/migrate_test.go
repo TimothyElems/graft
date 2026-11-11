@@ -63,8 +63,18 @@ func TestConcurrentStartsApplyEachMigrationOnce(t *testing.T) {
 		}()
 	}
 	wg.Wait()
-	if len(all) != 1 || all[0] != "0001_init.sql" {
-		t.Fatalf("six concurrent migrators applied %v; want 0001_init.sql exactly once", all)
+	want, _ := db.Load(migrations.FS)
+	seen := map[string]int{}
+	for _, name := range all {
+		seen[name]++
+	}
+	for _, m := range want {
+		if seen[m.Name] != 1 {
+			t.Errorf("%s applied %d times by six concurrent migrators; want exactly once", m.Name, seen[m.Name])
+		}
+	}
+	if len(all) != len(want) {
+		t.Fatalf("six concurrent migrators applied %v; want each of %d migrations once", all, len(want))
 	}
 }
 

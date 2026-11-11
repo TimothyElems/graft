@@ -88,7 +88,7 @@ class AsyncGraft:
             raise NetworkError(f"Could not reach {self.base_url}: {e}") from e
         if resp.status_code >= 400:
             raise from_response(resp)
-        return resp.json()
+        return resp.content if req.raw else resp.json()
 
 
 class AsyncBranches:
@@ -128,6 +128,10 @@ class AsyncRuns:
     async def get(self, run_id: str) -> Run:
         """Fetch a run and its step results."""
         return Run.model_validate(await self._send(_build.get_run(run_id)))
+
+    async def bundle(self, run_id: str) -> bytes:
+        """The run's support bundle (.tar.gz, secrets removed by the server). See `graft doctor`."""
+        return _build.as_bytes(await self._send(_build.run_bundle(run_id)))
 
     def events(self, run_id: str, *, after: int = 0, page_size: int = 200) -> AsyncPager[Event, int]:
         """A run's events in seq order, from seq > `after`: `async for e in g.runs.events(run_id)`."""

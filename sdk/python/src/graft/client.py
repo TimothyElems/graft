@@ -33,6 +33,7 @@ class Graft:
                  timeout: httpx.Timeout | float = DEFAULT_TIMEOUT,
                  transport: httpx.BaseTransport | None = None, retry: RetryPolicy | None = None) -> None:
         token, self.base_url = resolve_config(token, base_url)
+        self._token = token  # kept only so `graft doctor` can scrub it from bundles
         self.retry = retry or RetryPolicy()
         self._http = httpx.Client(base_url=self.base_url, timeout=timeout, transport=transport,
                                   headers=default_headers(token))
@@ -75,7 +76,7 @@ class Graft:
             raise NetworkError(f"Could not reach {self.base_url}: {e}") from e
         if resp.status_code >= 400:
             raise from_response(resp)
-        return resp.json()
+        return resp.content if req.raw else resp.json()
 
 
 class Branches:
@@ -121,6 +122,10 @@ class Runs:
     def get(self, run_id: str) -> Run:
         """Fetch a run and its step results."""
         return Run.model_validate(self._send(_build.get_run(run_id)))
+
+    def bundle(self, run_id: str) -> bytes:
+        """The run's support bundle (.tar.gz, secrets removed by the server). See `graft doctor`."""
+        return _build.as_bytes(self._send(_build.run_bundle(run_id)))
 
     def events(self, run_id: str, *, after: int = 0, page_size: int = 200) -> SyncPager[Event, int]:
         """A run's events in seq order, from seq > `after`, fetching pages as you iterate."""

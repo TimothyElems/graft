@@ -33,6 +33,7 @@ class Request:
     json: JSONBody | None = None
     params: Mapping[str, str | int] = field(default_factory=lambda: dict[str, "str | int"]())
     headers: Mapping[str, str] = field(default_factory=lambda: dict[str, str]())
+    raw: bool = False  # the body is bytes (e.g. a bundle), not JSON
 
 
 def resolve_config(token: str | None, base_url: str | None) -> tuple[str, str]:
@@ -97,6 +98,17 @@ def list_events(run_id: str, after: int, limit: int) -> Request:
     return Request("GET", f"/v1/runs/{run_id}/events", params={"after": after, "limit": limit})
 
 
+def run_bundle(run_id: str) -> Request:
+    return Request("GET", f"/v1/runs/{run_id}/bundle",
+                   headers={"Accept": "application/gzip, application/problem+json"}, raw=True)
+
+
+def as_bytes(body: object) -> bytes:
+    if not isinstance(body, bytes):
+        raise TypeError(f"expected bytes, got {type(body).__name__}")
+    return body
+
+
 class _Builders:
     """The request builders as one object, so clients import a single public name."""
     health = staticmethod(health)
@@ -106,6 +118,8 @@ class _Builders:
     create_run = staticmethod(create_run)
     get_run = staticmethod(get_run)
     list_events = staticmethod(list_events)
+    run_bundle = staticmethod(run_bundle)
+    as_bytes = staticmethod(as_bytes)
 
 
 build = _Builders()

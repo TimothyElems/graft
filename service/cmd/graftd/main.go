@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -38,14 +39,15 @@ import (
 	"graft/service/internal/stream"
 )
 
-var version = "v0.6.0-dev"
+var version = "v0.7.0-dev"
 
 func main() {
 	health := flag.Bool("healthcheck", false, "GET /healthz on this machine and exit")
 	path := flag.String("config", envOr("GRAFT_CONFIG", "graft.toml"), "path to graft.toml")
 	flag.Parse()
 
-	cfg, err := config.Load(*path, os.Getenv)
+	asked := map[string]bool{}
+	cfg, err := config.Load(*path, func(k string) string { asked[k] = true; return os.Getenv(k) })
 	if err != nil {
 		// Plain text, one problem per line: this is read by a person, at startup.
 		fmt.Fprintf(os.Stderr, "graftd: invalid configuration, not starting:\n  %s\n",
@@ -57,6 +59,10 @@ func main() {
 	}
 
 	log := slog.New(obs.LogHandler(slog.NewJSONHandler(os.Stdout, nil)))
+	if unknown := config.UnknownEnv(os.Environ(), asked); len(unknown) > 0 {
+		log.Warn("ignoring unknown GRAFT_* environment variables (a typo?); see graft.toml for every setting",
+			"unknown", unknown)
+	}
 	token := os.Getenv("GRAFT_TOKEN")
 	if len(token) < 16 {
 		log.Error("GRAFT_TOKEN must be set (16+ characters); refusing to start without auth")
@@ -123,7 +129,8 @@ func main() {
 	}
 	hub := &stream.Hub{Pool: pool, Log: log, WriteTimeout: cfg.Stream.WriteTimeout.Duration, Poll: cfg.Stream.Poll.Duration}
 	go hub.Run(ctx)
-	srv := api.New(api.Server{Pool: pool, Token: token, Version: version, Log: log, Hub: hub, Obs: o})
+	srv := api.New(api.Server{Pool: pool, Token: token, Version: version, Log: log, Hub: hub, Obs: o,
+		Secrets: dbSecrets(dbURL), Config: cfg})
 
 	hs := &http.Server{Addr: cfg.Server.Addr, Handler: srv.Handler(), ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second}
@@ -142,6 +149,19 @@ func main() {
 	go func() { workersDone.Wait(); close(finished) }()
 	lifecycle.Shutdown(lifecycle.Plan{Grace: cfg.Shutdown.Grace.Duration, Deadline: cfg.Shutdown.Deadline.Duration, Log: log,
 		StopHTTP: hs.Shutdown, StopWork: stopWork, WorkersDone: finished, Exit: os.Exit})
+}
+
+// dbSecrets is what the support bundle must never contain from the database URL: its
+// password. (A key=value DSN's password=... is caught by the bundle's own rules.)
+func dbSecrets(dbURL string) []string {
+	u, err := url.Parse(dbURL)
+	if err != nil || u.User == nil {
+		return nil
+	}
+	if p, ok := u.User.Password(); ok && p != "" {
+		return []string{p}
+	}
+	return nil
 }
 
 func envOr(k, def string) string {

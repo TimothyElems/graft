@@ -1,0 +1,109 @@
+{
+  "about": "Shared by service/internal/bundle (Go, server side) and sdk/python/src/graft/_redact.py (client side). Both must turn every input into exactly its want. secrets: literal values the redactor is told about (a token, a database password).",
+  "secrets": [
+    "s3cr3t-token-for-tests-only",
+    "hunter2hunter2"
+  ],
+  "cases": [
+    {
+      "name": "bearer header",
+      "input": "Authorization: Bearer abcDEF123456789.xyz",
+      "want": "Authorization: Bearer [REDACTED]"
+    },
+    {
+      "name": "basic header",
+      "input": "authorization: basic dXNlcjpwYXNzd29yZA==",
+      "want": "authorization: basic [REDACTED]"
+    },
+    {
+      "name": "postgres url password",
+      "input": "dial postgres://graft:pa55word@db.internal:5432/graft failed",
+      "want": "dial postgres://graft:[REDACTED]@db.internal:5432/graft failed"
+    },
+    {
+      "name": "url without password is kept",
+      "input": "postgres://graft@127.0.0.1:5432/graft",
+      "want": "postgres://graft@127.0.0.1:5432/graft"
+    },
+    {
+      "name": "aws access key id",
+      "input": "using key AKIAIOSFODNN7EXAMPLE now",
+      "want": "using key [REDACTED] now"
+    },
+    {
+      "name": "env style password",
+      "input": "PGPASSWORD=correct-horse psql -c 'select 1'",
+      "want": "PGPASSWORD=[REDACTED] psql -c 'select 1'"
+    },
+    {
+      "name": "json token field",
+      "input": "{\"api_key\": \"sk_live_123456789\", \"n\": 1}",
+      "want": "{\"api_key\": \"[REDACTED]\", \"n\": 1}"
+    },
+    {
+      "name": "colon secret",
+      "input": "client_secret: abc.def-ghi",
+      "want": "client_secret: [REDACTED]"
+    },
+    {
+      "name": "github token",
+      "input": "push with ghp_aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789 ok",
+      "want": "push with [REDACTED] ok"
+    },
+    {
+      "name": "jwt (Supabase anon/service keys are JWTs)",
+      "input": "key=eyJhbGciOiJIUzI1NiJ9.eyJyb2xlIjoic2VydmljZV9yb2xlIn0.abcdefghijklmnop",
+      "want": "key=[REDACTED]"
+    },
+    {
+      "name": "supabase secret key",
+      "input": "SUPABASE=sb_secret_FAKE-for-tests",
+      "want": "SUPABASE=[REDACTED]"
+    },
+    {
+      "name": "private key block",
+      "input": "a\n-----BEGIN RSA PRIVATE KEY-----\nMIIEow\nIBAAK\n-----END RSA PRIVATE KEY-----\nb",
+      "want": "a\n[REDACTED PRIVATE KEY]\nb"
+    },
+    {
+      "name": "literal secret anywhere",
+      "input": "token was s3cr3t-token-for-tests-only, retry",
+      "want": "token was [REDACTED], retry"
+    },
+    {
+      "name": "literal db password outside a url",
+      "input": "auth failed for hunter2hunter2",
+      "want": "auth failed for [REDACTED]"
+    },
+    {
+      "name": "already redacted stays the same",
+      "input": "PGPASSWORD=[REDACTED] Bearer [REDACTED]",
+      "want": "PGPASSWORD=[REDACTED] Bearer [REDACTED]"
+    },
+    {
+      "name": "not a secret: token_count",
+      "input": "token_count: 5, max_tokens=10",
+      "want": "token_count: 5, max_tokens=10"
+    },
+    {
+      "name": "not a secret: fake step",
+      "input": "graft-fake: step migrate attempt 2: ok after 10ms (scripted, no container)",
+      "want": "graft-fake: step migrate attempt 2: ok after 10ms (scripted, no container)"
+    },
+    {
+      "name": "not a secret: run and event ids",
+      "input": "run_7XKQ2M4ZJH3NB evt_AAAAAAAAAAAAAAAAAAAA br_demo",
+      "want": "run_7XKQ2M4ZJH3NB evt_AAAAAAAAAAAAAAAAAAAA br_demo"
+    },
+    {
+      "name": "not a secret: the word password in prose",
+      "input": "check the password policy",
+      "want": "check the password policy"
+    },
+    {
+      "name": "not a secret: basic in prose",
+      "input": "basic functionality works",
+      "want": "basic functionality works"
+    }
+  ]
+}

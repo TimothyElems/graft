@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
+	"reflect"
 	"syscall"
 	"testing"
 	"time"
@@ -265,5 +267,88 @@ func TestWorkerStepRunsTheKernelAndRecordsIt(t *testing.T) {
 	}
 	if did, _ := w.Step(ctx); did {
 		t.Fatal("queue should be empty")
+	}
+}
+
+// A run may last longer than one database write is allowed to take. The write
+// timeout must bound each write, not the whole run: with a per-run deadline, every
+// run longer than it failed to record its events, kept its lease until it lapsed,
+// and was re-run from scratch by the next worker, forever.
+func TestARunLongerThanTheWriteTimeoutStillFinishes(t *testing.T) {
+	ctx := context.Background()
+	pool, _ := freshDB(t)
+	seedRun(t, pool, "run_seed") // creates the project and branch
+	spec, _ := json.Marshal(store.RunSpec{Concurrency: 1, Steps: []store.StepSpec{
+		{ID: "a", Command: []string{"graft-fake", "ok:400"}},
+		{ID: "b", Needs: []string{"a"}, Command: []string{"graft-fake", "ok:400"}},
+	}})
+	if _, err := pool.Exec(ctx, `UPDATE runs SET status = 'succeeded' WHERE id = 'run_seed';
+		INSERT INTO runs (id, branch_id, status, spec) VALUES ('run_long', 'br_l', 'queued', '`+string(spec)+`')`); err != nil {
+		t.Fatal(err)
+	}
+	w := &queue.Worker{Pool: pool, Clock: sched.Clock{Runner: runner.Script{}}, Owner: "w1",
+		WriteTimeout: 300 * time.Millisecond} // each write takes milliseconds; the run takes ~800 ms
+	did, err := w.Step(ctx)
+	if !did || err != nil {
+		t.Fatalf("did=%v err=%v", did, err)
+	}
+	if r := row(t, pool, "run_long"); r.Status != "succeeded" || r.Owner != nil {
+		t.Fatalf("a run longer than the write timeout did not finish: %+v", r)
+	}
+}
+
+// Every attempt's output is kept, per claim, for the support bundle.
+func TestWorkerKeepsEachAttemptsOutput(t *testing.T) {
+	ctx := context.Background()
+	pool, _ := freshDB(t)
+	seedRun(t, pool, "run_logs") // migrate: fail then ok; seed: ok
+	w := &queue.Worker{Pool: pool, Clock: sched.Clock{Runner: runner.Script{}}, Owner: "w1"}
+	if did, err := w.Step(ctx); !did || err != nil {
+		t.Fatalf("did=%v err=%v", did, err)
+	}
+	rows, err := pool.Query(ctx, `SELECT claim, step_id, attempt, outcome, output FROM attempt_logs
+		WHERE run_id = 'run_logs' ORDER BY step_id, attempt`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for rows.Next() {
+		var claim, attempt int
+		var step, outcome, output string
+		if err := rows.Scan(&claim, &step, &attempt, &outcome, &output); err != nil {
+			t.Fatal(err)
+		}
+		if output == "" {
+			t.Errorf("%s attempt %d: empty output", step, attempt)
+		}
+		got = append(got, fmt.Sprintf("%d/%s/%d/%s", claim, step, attempt, outcome))
+	}
+	want := []string{"1/migrate/1/fail", "1/migrate/2/ok", "1/seed/1/ok"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("attempt logs %v, want %v", got, want)
+	}
+}
+
+// Fenced like events: a worker that no longer holds the lease writes nothing.
+func TestAttemptLogFromAWorkerWithoutTheLeaseIsDropped(t *testing.T) {
+	ctx := context.Background()
+	pool, _ := freshDB(t)
+	seedRun(t, pool, "run_fence")
+	c, err := queue.Claim(ctx, pool, "owner-a", time.Minute)
+	if err != nil || c == nil {
+		t.Fatalf("claim: %v %v", c, err)
+	}
+	res := runner.Result{Outcome: runner.OK, Output: "hello"}
+	err = queue.SaveAttempt(ctx, pool, c.ID, c.Claims, "owner-b", runner.Attempt{StepID: "migrate", N: 1}, res)
+	if !errors.Is(err, queue.ErrLeaseLost) {
+		t.Fatalf("stranger's write: err=%v, want ErrLeaseLost", err)
+	}
+	if err := queue.SaveAttempt(ctx, pool, c.ID, c.Claims, "owner-a", runner.Attempt{StepID: "migrate", N: 1}, res); err != nil {
+		t.Fatalf("owner's write: %v", err)
+	}
+	var n int
+	_ = pool.QueryRow(ctx, "SELECT count(*) FROM attempt_logs WHERE run_id = 'run_fence'").Scan(&n)
+	if n != 1 {
+		t.Fatalf("%d rows, want only the owner's", n)
 	}
 }

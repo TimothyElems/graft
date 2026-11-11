@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -80,5 +81,31 @@ func TestEnvOverridesTheFileAndIsValidatedToo(t *testing.T) {
 	env["GRAFT_HEARTBEAT"] = "1s" // more than half of the 1.5 s lease
 	if _, err := Load(p, func(k string) string { return env[k] }); err == nil || !strings.Contains(err.Error(), "workers.heartbeat") {
 		t.Fatalf("a bad env value must be refused too: %v", err)
+	}
+}
+
+// The support bundle includes the configuration as JSON; durations must read as
+// they were written in graft.toml ("30s"), not as nanoseconds.
+func TestConfigAsJSONReadsLikeTheToml(t *testing.T) {
+	b, err := json.Marshal(Defaults())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `"workers":{"count":2,"lease":"30s"`) {
+		t.Fatalf("durations in JSON: %s", b)
+	}
+}
+
+// A mistyped variable (GRAFT_SERVER_ADDR for GRAFT_ADDR) used to be ignored in
+// silence: the setting "did nothing". graftd now names it at startup.
+func TestUnknownGraftVariablesAreNamed(t *testing.T) {
+	asked := map[string]bool{}
+	if _, err := Load(filepath.Join(t.TempDir(), "none.toml"), func(k string) string { asked[k] = true; return "" }); err != nil {
+		t.Fatal(err)
+	}
+	got := UnknownEnv([]string{"GRAFT_SERVER_ADDR=127.0.0.1:1", "GRAFT_ADDR=:1", "PATH=/bin", "GRAFT_URL=http://x",
+		"GRAFT_TOKEN=t", "GRAFT_WORKER=3"}, asked)
+	if !reflect.DeepEqual(got, []string{"GRAFT_SERVER_ADDR", "GRAFT_WORKER"}) {
+		t.Fatalf("unknown: %v", got)
 	}
 }

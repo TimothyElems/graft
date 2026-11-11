@@ -12,6 +12,7 @@ import (
 	"net"
 	"os"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -33,34 +34,37 @@ func (d *Duration) UnmarshalText(b []byte) error {
 
 func (d Duration) String() string { return d.Duration.String() }
 
+// MarshalText writes a duration the way graft.toml does ("30s"), for JSON too.
+func (d Duration) MarshalText() ([]byte, error) { return []byte(d.Duration.String()), nil }
+
 type Config struct {
 	Server struct {
-		Addr        string `toml:"addr"`
-		MetricsAddr string `toml:"metrics_addr"`
-	} `toml:"server"`
+		Addr        string `toml:"addr" json:"addr"`
+		MetricsAddr string `toml:"metrics_addr" json:"metrics_addr"`
+	} `toml:"server" json:"server"`
 	Workers struct {
-		Count      int      `toml:"count"`
-		Lease      Duration `toml:"lease"`
-		Heartbeat  Duration `toml:"heartbeat"`
-		CancelPoll Duration `toml:"cancel_poll"`
-	} `toml:"workers"`
+		Count      int      `toml:"count" json:"count"`
+		Lease      Duration `toml:"lease" json:"lease"`
+		Heartbeat  Duration `toml:"heartbeat" json:"heartbeat"`
+		CancelPoll Duration `toml:"cancel_poll" json:"cancel_poll"`
+	} `toml:"workers" json:"workers"`
 	Runner struct {
-		Kind         string `toml:"kind"`
-		DefaultImage string `toml:"default_image"`
-		Memory       string `toml:"memory"`
-		CPUs         string `toml:"cpus"`
-		Pids         int    `toml:"pids"`
-		User         string `toml:"user"`
-		TmpSize      string `toml:"tmp_size"`
-	} `toml:"runner"`
+		Kind         string `toml:"kind" json:"kind"`
+		DefaultImage string `toml:"default_image" json:"default_image"`
+		Memory       string `toml:"memory" json:"memory"`
+		CPUs         string `toml:"cpus" json:"cpus"`
+		Pids         int    `toml:"pids" json:"pids"`
+		User         string `toml:"user" json:"user"`
+		TmpSize      string `toml:"tmp_size" json:"tmp_size"`
+	} `toml:"runner" json:"runner"`
 	Stream struct {
-		WriteTimeout Duration `toml:"write_timeout"`
-		Poll         Duration `toml:"poll"`
-	} `toml:"stream"`
+		WriteTimeout Duration `toml:"write_timeout" json:"write_timeout"`
+		Poll         Duration `toml:"poll" json:"poll"`
+	} `toml:"stream" json:"stream"`
 	Shutdown struct {
-		Grace    Duration `toml:"grace"`
-		Deadline Duration `toml:"deadline"`
-	} `toml:"shutdown"`
+		Grace    Duration `toml:"grace" json:"grace"`
+		Deadline Duration `toml:"deadline" json:"deadline"`
+	} `toml:"shutdown" json:"shutdown"`
 }
 
 func Defaults() Config {
@@ -220,3 +224,22 @@ func (c Config) Validate() error {
 	}
 	return errors.Join(errs...)
 }
+
+// UnknownEnv returns GRAFT_* variables in environ that graftd does not read: most
+// likely a typo. asked is every name Load looked up. Variables other Graft tools
+// read (the SDK's GRAFT_URL, the tests' settings) are not reported.
+func UnknownEnv(environ []string, asked map[string]bool) []string {
+	var out []string
+	for _, kv := range environ {
+		name, _, _ := strings.Cut(kv, "=")
+		if strings.HasPrefix(name, "GRAFT_") && !asked[name] && !otherTools[name] {
+			out = append(out, name)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// Read by graftd outside Load (secrets, the -config default) or by other Graft tools.
+var otherTools = map[string]bool{"GRAFT_TOKEN": true, "GRAFT_DATABASE_URL": true, "GRAFT_CONFIG": true,
+	"GRAFT_URL": true, "GRAFT_TEST_DATABASE_URL": true, "GRAFT_DOCKER": true, "GRAFT_E2E": true}

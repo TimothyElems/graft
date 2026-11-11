@@ -40,6 +40,8 @@ type Server struct {
 	Log     *slog.Logger
 	Hub     *stream.Hub
 	Obs     *obs.Obs
+	Secrets []string // besides Token: values the support bundle removes (the database password)
+	Config  any      // the loaded configuration, for the support bundle
 
 	idemBeforeStore func() // tests only: runs after a keyed handler, before its key is stored
 }
@@ -72,6 +74,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /v1/runs/{id}", s.auth(s.getRun))
 	mux.Handle("POST /v1/runs/{id}/cancel", s.auth(s.cancelRun))
 	mux.Handle("GET /v1/runs/{id}/events", s.auth(s.listRunEvents))
+	mux.Handle("GET /v1/runs/{id}/bundle", s.auth(s.runBundle))
 	mux.Handle("GET /v1/stream", s.auth(s.stream))
 	return s.requestID(mux)
 }

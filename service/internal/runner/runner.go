@@ -106,11 +106,16 @@ func (Script) Run(ctx context.Context, a Attempt) (Result, error) {
 	}
 	t := time.NewTimer(wait)
 	defer t.Stop()
+	say := func(o Outcome) string { // scripted steps print one honest line, so their logs are not empty
+		return fmt.Sprintf("graft-fake: step %s attempt %d: %s after %s (scripted, no container)\n",
+			a.StepID, a.N, o, time.Since(start).Round(time.Millisecond))
+	}
+	exit := map[Outcome]int{OK: 0, Fail: 1, Timeout: -1, Cancelled: -1} // -1: killed, as the Docker runner reports it
 	select {
 	case <-t.C:
-		return Result{Outcome: outcome, Took: time.Since(start)}, nil
+		return Result{Outcome: outcome, ExitCode: exit[outcome], Output: say(outcome), Took: time.Since(start)}, nil
 	case <-ctx.Done():
-		return Result{Outcome: Cancelled, Took: time.Since(start)}, nil
+		return Result{Outcome: Cancelled, ExitCode: -1, Output: say(Cancelled), Took: time.Since(start)}, nil
 	}
 }
 

@@ -17,6 +17,7 @@ import (
 
 	"graft/kernel/pipeline"
 	"graft/service/internal/events"
+	"graft/service/internal/runner"
 	"graft/service/internal/sched"
 	"graft/service/internal/store"
 )
@@ -35,9 +36,12 @@ type Worker struct {
 	Heartbeat  time.Duration // default DefaultHeartbeat
 	CancelPoll time.Duration // how often a running run checks for a cancel request; default 1s
 	Idle       time.Duration // sleep when the queue is empty; default 200ms
-	Log        *slog.Logger
-	Hooks      Hooks        // optional, for metrics
-	Tracer     trace.Tracer // optional: a span per run
+	// WriteTimeout bounds each database write the run makes (events, the finish).
+	// Default 30s.
+	WriteTimeout time.Duration
+	Log          *slog.Logger
+	Hooks        Hooks        // optional, for metrics
+	Tracer       trace.Tracer // optional: a span per run
 }
 
 // Hooks lets observability watch the worker without the worker knowing about it.
@@ -59,6 +63,9 @@ func (w *Worker) defaults() {
 	}
 	if w.Idle == 0 {
 		w.Idle = 200 * time.Millisecond
+	}
+	if w.WriteTimeout == 0 {
+		w.WriteTimeout = 30 * time.Second
 	}
 	if w.Log == nil {
 		w.Log = slog.New(slog.NewJSONHandler(io.Discard, nil))
@@ -112,9 +119,10 @@ func (w *Worker) StepWith(claimCtx, ctx context.Context) (bool, error) {
 		w.Log.InfoContext(ctx, "run claimed", "run_id", c.ID, "branch_id", c.BranchID, "claims", c.Claims)
 	}
 	began := time.Now()
-	// Background-based context for writes that must still happen while shutting down.
-	bg, cancelBg := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancelBg()
+	// Writes that must still happen while shutting down: not cancelled with ctx, but
+	// keeping its values (the run's trace span). Each write gets its own deadline
+	// (w.bounded): a deadline for the whole run would fail every run that outlasts it.
+	bg := context.WithoutCancel(ctx)
 
 	var spec store.RunSpec
 	if err := json.Unmarshal(c.Spec, &spec); err != nil {
@@ -124,7 +132,10 @@ func (w *Worker) StepWith(claimCtx, ctx context.Context) (bool, error) {
 	started := ""
 	if c.Claims > 1 {
 		// The previous owner died holding this run. Its containers may still be running.
-		if err := w.Clock.Runner.Cleanup(bg, c.ID); err != nil {
+		cctx, done := w.bounded(bg)
+		err := w.Clock.Runner.Cleanup(cctx, c.ID)
+		done()
+		if err != nil {
 			w.Log.Warn("cleanup after lost lease", "run_id", c.ID, "err", err)
 		}
 		why := "the previous worker lost its lease"
@@ -142,13 +153,25 @@ func (w *Worker) StepWith(claimCtx, ctx context.Context) (bool, error) {
 	cancel := make(chan struct{})
 	var once sync.Once
 	requestCancel := func() { once.Do(func() { close(cancel) }) }
-	if asked, err := CancelRequested(bg, w.Pool, c.ID); err == nil && asked {
+	qctx, qdone := w.bounded(bg)
+	asked, err := CancelRequested(qctx, w.Pool, c.ID)
+	qdone()
+	if err == nil && asked {
 		requestCancel() // cancelled while still queued: rule 5 at time 0
 	}
 	go Heartbeat(work, w.Pool, c.ID, w.Owner, w.Lease, w.Heartbeat, w.CancelPoll,
 		func(err error) { stopWork(err) }, requestCancel)
 
-	res, emitted, runErr := w.Clock.Run(work, c.ID, spec, cancel, func(evs []pipeline.Event) error {
+	clock := w.Clock // a copy per run: the hook knows this run's claim
+	clock.Attempted = func(a runner.Attempt, r runner.Result) {
+		actx, done := w.bounded(bg)
+		defer done()
+		// Losing one log is not worth failing the run over; a lost lease shows up on the next event write.
+		if err := SaveAttempt(actx, w.Pool, c.ID, c.Claims, w.Owner, a, r); err != nil {
+			w.Log.Warn("attempt log not saved", "run_id", c.ID, "step", a.StepID, "attempt", a.N, "err", err)
+		}
+	}
+	res, emitted, runErr := clock.Run(work, c.ID, spec, cancel, func(evs []pipeline.Event) error {
 		return w.append(bg, c, evs)
 	})
 	switch {
@@ -157,7 +180,9 @@ func (w *Worker) StepWith(claimCtx, ctx context.Context) (bool, error) {
 		return true, ErrLeaseLost
 	case errors.Is(runErr, sched.ErrInterrupted):
 		// Shutting down: every attempt is already stopped. Hand the run back at once.
-		if err := Release(bg, w.Pool, c.ID, w.Owner); err != nil {
+		rctx, rdone := w.bounded(bg)
+		defer rdone()
+		if err := Release(rctx, w.Pool, c.ID, w.Owner); err != nil {
 			return true, err
 		}
 		w.Log.Info("run released on shutdown", "run_id", c.ID, "owner", w.Owner)
@@ -168,8 +193,15 @@ func (w *Worker) StepWith(claimCtx, ctx context.Context) (bool, error) {
 	return true, w.finish(bg, c, spec, &res, res.Events[emitted:], nil, began)
 }
 
+// bounded is the deadline for one database write (or one cleanup) made for a run.
+func (w *Worker) bounded(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, w.WriteTimeout)
+}
+
 // append writes events as they happen, fenced: only while this worker holds the lease.
 func (w *Worker) append(ctx context.Context, c *Claimed, kevs []pipeline.Event) error {
+	ctx, done := w.bounded(ctx)
+	defer done()
 	err := pgx.BeginFunc(ctx, w.Pool, func(tx pgx.Tx) error {
 		_, err := events.AppendFenced(ctx, tx, c.ID, c.BranchID, w.Owner, events.FromKernel(kevs))
 		if errors.Is(err, events.ErrNotOwner) {
@@ -185,6 +217,8 @@ func (w *Worker) append(ctx context.Context, c *Claimed, kevs []pipeline.Event) 
 
 func (w *Worker) finish(ctx context.Context, c *Claimed, spec store.RunSpec, res *pipeline.Result, rest []pipeline.Event,
 	runErr error, began time.Time) error {
+	ctx, done := w.bounded(ctx)
+	defer done()
 	err := Finish(ctx, w.Pool, c.ID, c.BranchID, w.Owner, spec, res, rest, runErr)
 	if err == nil && w.Hooks.Events != nil {
 		w.Hooks.Events(rest)

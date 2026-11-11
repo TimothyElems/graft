@@ -27,6 +27,9 @@ type Emit func([]pipeline.Event) error
 type Clock struct {
 	Runner runner.Runner
 	Now    func() time.Time // default time.Now
+	// Attempted, if set, sees every attempt's result (its output, exit code) before
+	// the kernel records how it ended. The worker stores these for support bundles.
+	Attempted func(runner.Attempt, runner.Result)
 }
 
 func steps(spec store.RunSpec) []pipeline.Step {
@@ -36,6 +39,9 @@ func steps(spec store.RunSpec) []pipeline.Step {
 	}
 	return out
 }
+
+// KernelSteps is the pipeline as the kernel sees it (no images or commands).
+func KernelSteps(spec store.RunSpec) []pipeline.Step { return steps(spec) }
 
 // Validate refuses a pipeline the kernel would refuse, or a malformed graft-fake script,
 // before it is accepted.
@@ -150,6 +156,9 @@ func (c Clock) Run(ctx context.Context, runID string, spec store.RunSpec, cancel
 			go func(i int) {
 				defer wg.Done()
 				res, err := c.Runner.Run(attempts, a)
+				if err == nil && c.Attempted != nil {
+					c.Attempted(a, res)
+				}
 				done <- finished{step: i, outcome: kernelOutcome(res.Outcome), at: ms(), err: err}
 			}(s.Step)
 		}

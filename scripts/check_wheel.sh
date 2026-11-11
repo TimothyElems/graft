@@ -21,3 +21,5 @@ echo "--- mypy --strict (installed wheel only)"
 echo "--- pyright strict (installed wheel only)"
 printf '{"typeCheckingMode": "strict", "pythonVersion": "3.10", "venvPath": ".", "venv": "venv"}' > pyrightconfig.json
 ./venv/bin/pyright sample_app.py
+echo "--- the graft command is installed and runs"
+./venv/bin/graft doctor --help | head -1

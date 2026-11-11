@@ -150,13 +150,28 @@ paths:
     get:
       operationId: getRunBundle
       summary: Repro bundle for support (gzip)
-      description: Case JSON, events, step logs with secrets removed, service version, and config. Everything a support engineer needs to replay the run in the kernel.
+      description: |
+        One .tar.gz: manifest.json, run.json, events.json, case.json (the kernel Case that
+        replays the last claim; absent until the run finishes, and the manifest says why),
+        attempts/claim-N/<step>-attempt-K.log (last 8 KB each), config.json. Secrets are
+        removed by value (the API token, the database password) and by shape
+        (fixtures/redaction/cases.json). Best effort: read the logs before sharing.
+        `graft doctor <run_id>` downloads it, scrubs it again, and adds client details.
+        Replay: docs/replay.md.
       responses:
         "200":
           description: A .tar.gz file
+          headers:
+            Content-Disposition:
+              schema: { type: string, example: 'attachment; filename="graft-bundle-run_x.tar.gz"' }
+            X-Graft-Redactions:
+              description: How many secrets the server removed.
+              schema: { type: integer, minimum: 0 }
           content:
             application/gzip:
               schema: { type: string, format: binary }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
   /v1/stream:
     get:
       operationId: stream
